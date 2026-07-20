@@ -332,11 +332,16 @@ struct WalkingRocky: View {
         return NSImage(contentsOf: url)
     }
 
+    @State private var start = Date()
+
     var body: some View {
         GeometryReader { geo in
             let track = max(1, geo.size.width - size)
             TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
-                let t = timeline.date.timeIntervalSinceReferenceDate
+                // Clock relative to appearance: Rocky always enters at the
+                // left edge walking right — no random mid-patrol jump (and no
+                // flicker) when the panel expands.
+                let t = max(0, timeline.date.timeIntervalSince(start))
                 // Triangle wave 0→1→0 across the track.
                 let cycle = (t * speed).truncatingRemainder(dividingBy: track * 2)
                 let goingRight = cycle < track
@@ -360,6 +365,7 @@ struct WalkingRocky: View {
             }
         }
         .frame(height: size)
+        .onAppear { start = Date() }
     }
 }
 
