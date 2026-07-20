@@ -104,7 +104,7 @@ struct NotchView: View {
                 if hasPending {
                     RockySprite(state: "rocky-alert", fallback: "south", size: 20)
                 } else if !hub.celebrating.isEmpty {
-                    RockySprite(state: "rocky-celebrating", fallback: "south", size: 22)
+                    RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 22)
                         .transition(.scale.combined(with: .opacity))
                 } else if anyRunning {
                     RockyAnimatedSprite(size: 20)
@@ -346,7 +346,7 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 10) {
             if celebrating {
-                RockySprite(state: "rocky-celebrating", fallback: "south", size: 24)
+                RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 24)
                     .transition(.scale.combined(with: .opacity))
             } else {
                 Circle()
@@ -609,24 +609,36 @@ extension View {
     }
 }
 
-/// Rocky alive: cycles the idle frames (breathing carapace).
+/// Rocky alive: cycles bundled animation frames.
 struct RockyAnimatedSprite: View {
+    var prefix = "idle"
+    var fallback = "south"
+    var fps: Double = 8
     let size: CGFloat
-    private static let frames: [NSImage] = (0..<9).compactMap { index in
-        guard let url = Bundle.main.url(
-            forResource: "idle-\(index)", withExtension: "png", subdirectory: "Art"
-        ) else { return nil }
-        return NSImage(contentsOf: url)
+
+    private static var cache: [String: [NSImage]] = [:]
+
+    private static func frames(prefix: String) -> [NSImage] {
+        if let cached = cache[prefix] { return cached }
+        let loaded: [NSImage] = (0..<16).compactMap { index in
+            guard let url = Bundle.main.url(
+                forResource: "\(prefix)-\(index)", withExtension: "png", subdirectory: "Art"
+            ) else { return nil }
+            return NSImage(contentsOf: url)
+        }
+        cache[prefix] = loaded
+        return loaded
     }
 
     var body: some View {
-        if Self.frames.isEmpty {
-            RockySprite(state: "south", fallback: "south", size: size)
+        let frames = Self.frames(prefix: prefix)
+        if frames.isEmpty {
+            RockySprite(state: fallback, fallback: "south", size: size)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 8.0)) { timeline in
-                let index = Int(timeline.date.timeIntervalSinceReferenceDate * 8)
-                    % Self.frames.count
-                Image(nsImage: Self.frames[index])
+            TimelineView(.animation(minimumInterval: 1.0 / fps)) { timeline in
+                let index = Int(timeline.date.timeIntervalSinceReferenceDate * fps)
+                    % frames.count
+                Image(nsImage: frames[index])
                     .interpolation(.none)
                     .resizable()
                     .scaledToFit()
