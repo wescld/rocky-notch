@@ -76,18 +76,26 @@ final class NotchWindowController {
     /// the real mouse position, otherwise the frame change itself generates
     /// hover-exit events and the panel flickers.
     ///
-    /// A new pending request auto-reveals the panel ONCE; after that the user
-    /// may collapse it (mouse away) and the card stays available on re-hover
-    /// for as long as the request lives.
+    /// A pending request keeps the panel open until the user has seen it:
+    /// hovering the card counts as seeing, so once the mouse leaves (or the
+    /// request resolves) the panel may collapse. The card stays available on
+    /// re-hover for as long as the request lives.
     private var collapseTimer: Timer?
     private var revealedRequests: Set<String> = []
+    private var acknowledgedRequests: Set<String> = []
 
     private func syncAndLayout() {
         let pendingIds = Set(hub.sessions.compactMap { $0.pending?.requestId })
         revealedRequests.formIntersection(pendingIds)
+        acknowledgedRequests.formIntersection(pendingIds)
         let hasNewPending = !pendingIds.subtracting(revealedRequests).isEmpty
 
-        if hasNewPending || state.hovering {
+        if state.hovering {
+            acknowledgedRequests.formUnion(pendingIds)
+        }
+        let hasUnseenPending = !pendingIds.subtracting(acknowledgedRequests).isEmpty
+
+        if hasNewPending || hasUnseenPending || state.hovering {
             revealedRequests.formUnion(pendingIds)
             collapseTimer?.invalidate()
             collapseTimer = nil
