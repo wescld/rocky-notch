@@ -76,6 +76,14 @@ final class AgentHub: ObservableObject {
     var resolveTerminalApp: (Int32) -> Int32? = { TerminalFocus.guiAncestor(of: $0) }
 
     private func handle(_ envelope: HookEnvelope) {
+        // Subagent permission requests have no UI (we track top-level
+        // sessions only) — release the hook immediately instead of holding
+        // it until the timeout.
+        if envelope.event.kind == .permissionRequest, envelope.event.agentId != nil {
+            server.reply(.passthrough, to: envelope.requestId)
+            return
+        }
+
         let knownBefore = Set(store.sessions.keys)
         store.apply(envelope, at: Date())
         if let guiPid = resolveTerminalApp(envelope.hookPid) {

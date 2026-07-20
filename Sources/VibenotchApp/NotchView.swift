@@ -1,15 +1,16 @@
 import SwiftUI
 import VibenotchCore
 
-/// The black shape that hugs the notch. Collapsed: status indicators in
-/// "wings" beside the notch. Expanded: session list with the approval card.
+/// The black surface that fuses with the notch. Collapsed: an LED strip per
+/// session beside the notch (hardware VU-meter language). Expanded: the
+/// session console with the approval card.
 struct NotchView: View {
     @ObservedObject var hub: AgentHub
     @ObservedObject var state: NotchUIState
 
     static let expandedWidth: CGFloat = 400
-    static let rowHeight: CGFloat = 44
-    static let cardHeight: CGFloat = 100
+    static let rowHeight: CGFloat = 46
+    static let cardHeight: CGFloat = 104
     static let wingWidth: CGFloat = 70
 
     static func size(
@@ -24,7 +25,7 @@ struct NotchView: View {
         }
         let rows = CGFloat(max(sessionCount, 1)) * rowHeight
         let card: CGFloat = hasPending ? cardHeight : 0
-        let height = notchHeight + rows + card + 16
+        let height = notchHeight + rows + card + 20
         return CGSize(
             width: max(expandedWidth, notchWidth + wingWidth * 2),
             height: min(height, 480)
@@ -46,9 +47,9 @@ struct NotchView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(background)
-        .animation(.spring(duration: 0.3, bounce: 0.15), value: state.expanded)
-        .animation(.spring(duration: 0.3, bounce: 0.15), value: hub.sessions.map(\.id))
+        .background(surface)
+        .animation(.spring(duration: 0.32, bounce: 0.12), value: state.expanded)
+        .animation(.spring(duration: 0.32, bounce: 0.12), value: hub.sessions.map(\.id))
         .onHover { hovering in
             // Expansion/collapse authority lives in NotchWindowController;
             // the view only reports raw hover.
@@ -56,72 +57,60 @@ struct NotchView: View {
         }
     }
 
-    private var background: some View {
+    /// True black, one hairline when open, amber halo only while something
+    /// needs the user. Nothing else — the surface must read as hardware.
+    private var surface: some View {
         let shape = UnevenRoundedRectangle(
-            cornerRadii: .init(bottomLeading: 16, bottomTrailing: 16),
+            cornerRadii: .init(bottomLeading: 18, bottomTrailing: 18),
             style: .continuous
         )
         return ZStack {
             shape.fill(.black)
             if state.expanded {
-                shape.fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.06), .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                shape
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.18),
-                                Color.white.opacity(0.04),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
+                shape.strokeBorder(Palette.hairline, lineWidth: 1)
             }
             if hasPending {
                 shape
-                    .strokeBorder(Color.orange.opacity(0.5), lineWidth: 1)
-                    .blur(radius: 2)
-                    .breathing(period: 1.4)
+                    .strokeBorder(Palette.amber.opacity(0.55), lineWidth: 1)
+                    .blur(radius: 2.5)
+                    .breathing(period: 1.5)
             }
         }
         .compositingGroup()
-        .shadow(color: .black.opacity(state.expanded ? 0.5 : 0), radius: 18, y: 8)
+        .shadow(color: .black.opacity(state.expanded ? 0.55 : 0), radius: 20, y: 10)
     }
 
     // MARK: - Collapsed
 
     private var collapsedContent: some View {
         HStack {
-            // Left wing: aggregated activity (equalizer while anything runs).
+            // Left wing: the meter — alive only while agents run.
             HStack {
                 if hub.sessions.contains(where: { $0.status == .running }) {
-                    EqualizerBars(color: .green)
-                        .frame(width: 16, height: 10)
+                    EqualizerBars(tint: Palette.green)
+                        .frame(width: 18, height: 11)
                 }
             }
-            .padding(.leading, 16)
+            .padding(.leading, 18)
             .frame(width: Self.wingWidth, alignment: .leading)
 
             Spacer()
 
-            // Right wing: one dot per session.
-            HStack(spacing: 5) {
+            // Right wing: one LED per session, newest first.
+            HStack(spacing: 6) {
                 if hub.sessions.isEmpty {
-                    Circle().fill(Color.white.opacity(0.25)).frame(width: 5, height: 5)
+                    LED(color: Palette.inkTertiary, lit: false)
                 } else {
                     ForEach(hub.sessions.prefix(6)) { session in
-                        StatusDot(status: session.status)
+                        LED(
+                            color: Palette.status(session.status),
+                            lit: session.status != .idle,
+                            urgent: session.pending != nil
+                        )
                     }
                 }
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, 18)
             .frame(width: Self.wingWidth, alignment: .trailing)
         }
         .frame(maxHeight: .infinity)
@@ -131,29 +120,38 @@ struct NotchView: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Color.clear.frame(height: 8)
+            Color.clear.frame(height: 10)
             if hub.sessions.isEmpty {
-                Text("nenhuma sessão ativa")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
+                VStack(spacing: 4) {
+                    EtchedLabel(text: "sem sessões", color: Palette.inkTertiary)
+                    Text("rode claude ou codex num terminal")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Palette.inkTertiary)
+                }
+                .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
             } else {
-                ForEach(hub.sessions) { session in
+                ForEach(Array(hub.sessions.enumerated()), id: \.element.id) { index, session in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(Palette.hairline)
+                            .frame(height: 1)
+                            .padding(.horizontal, 2)
+                    }
                     SessionRow(session: session, hub: hub)
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
-            Color.clear.frame(height: 8)
+            Color.clear.frame(height: 10)
         }
         .padding(.top, 30)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .colorScheme(.dark)
     }
 }
 
 // MARK: - Animated primitives
 
-/// Gentle infinite pulse (opacity + scale) for "needs attention" accents.
+/// Gentle infinite pulse (opacity) for "needs attention" accents.
 private struct BreathingModifier: ViewModifier {
     let period: Double
     @State private var dimmed = false
@@ -175,50 +173,56 @@ extension View {
     }
 }
 
-/// Tiny audio-style equalizer — the "agent is vibing" signature mark.
-struct EqualizerBars: View {
-    var color: Color
-    var barCount: Int = 3
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 2) {
-                ForEach(0..<barCount, id: \.self) { index in
-                    let phase = t * 2.4 + Double(index) * 1.7
-                    let height = 0.35 + 0.65 * abs(sin(phase))
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(color)
-                        .frame(height: 10 * height)
-                        .frame(maxHeight: .infinity, alignment: .center)
-                }
-            }
-        }
-    }
-}
-
-struct StatusDot: View {
-    let status: AgentSession.Status
-
-    var color: Color {
-        switch status {
-        case .running: .green
-        case .waitingPermission: .orange
-        case .waitingInput: .yellow
-        case .idle: .gray
-        }
-    }
-
-    private var needsAttention: Bool {
-        status == .waitingPermission || status == .waitingInput
-    }
+/// A physical indicator light: hot core, colored halo. Urgent LEDs pulse.
+struct LED: View {
+    let color: Color
+    var lit: Bool = true
+    var urgent: Bool = false
 
     var body: some View {
         Circle()
-            .fill(color)
+            .fill(lit ? color : Color.white.opacity(0.12))
             .frame(width: 6, height: 6)
-            .shadow(color: color.opacity(0.9), radius: needsAttention ? 4 : 2)
-            .breathing(period: needsAttention ? 0.8 : 2.6)
+            .overlay(
+                Circle()
+                    .fill(Color.white.opacity(lit ? 0.55 : 0))
+                    .frame(width: 2, height: 2)
+                    .offset(x: -0.5, y: -0.5)
+            )
+            .shadow(color: lit ? color.opacity(0.9) : .clear, radius: urgent ? 5 : 2.5)
+            .breathing(period: urgent ? 0.8 : 3.2)
+            .opacity(lit ? 1 : 0.8)
+    }
+}
+
+/// The signature mark: a 4-bar meter breathing with agent activity.
+struct EqualizerBars: View {
+    var tint: Color
+    var barCount: Int = 4
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
+            let t = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 2) {
+                ForEach(0..<barCount, id: \.self) { index in
+                    // Irrational-ish phase offsets so the loop never reads
+                    // as a repeating pattern.
+                    let phase = t * 2.6 + Double(index) * 1.618 * 2
+                    let level = 0.30 + 0.70 * abs(sin(phase)) * (0.75 + 0.25 * sin(t * 0.9 + Double(index)))
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(
+                            LinearGradient(
+                                colors: [tint, Palette.greenDeep],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(height: 11 * level)
+                        .frame(maxHeight: .infinity, alignment: .center)
+                }
+            }
+            .shadow(color: tint.opacity(0.6), radius: 3)
+        }
     }
 }
 
@@ -227,65 +231,67 @@ struct SessionRow: View {
     @ObservedObject var hub: AgentHub
     @State private var hoveringTerminal = false
 
-    var statusText: String {
+    private var statusLabel: String {
         switch session.status {
         case .running: "rodando"
-        case .waitingPermission: "pedindo permissão"
-        case .waitingInput: "esperando você"
-        case .idle: "terminou"
+        case .waitingPermission: "permissão"
+        case .waitingInput: "sua vez"
+        case .idle: "ocioso"
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if session.status == .running {
-                    EqualizerBars(color: .green)
-                        .frame(width: 14, height: 10)
-                } else {
-                    StatusDot(status: session.status)
+            HStack(spacing: 9) {
+                Group {
+                    if session.status == .running {
+                        EqualizerBars(tint: Palette.green)
+                    } else {
+                        LED(
+                            color: Palette.status(session.status),
+                            lit: session.status != .idle,
+                            urgent: session.pending != nil
+                        )
+                    }
                 }
+                .frame(width: 16, height: 11)
+
                 Text(session.projectName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
                     .lineLimit(1)
+
                 if session.agent != "claude-code" {
-                    Text(session.agent)
-                        .font(.system(size: 9, weight: .medium))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.white.opacity(0.12)))
-                        .foregroundStyle(.white.opacity(0.7))
+                    EtchedLabel(text: session.agent, color: Palette.inkTertiary)
                 }
+
                 if session.status == .running, let action = session.lastAction {
-                    Text(action)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .id(action)
-                        .transition(.opacity)
+                    ActionTicker(action: action)
                 } else {
-                    Text(statusText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    EtchedLabel(
+                        text: statusLabel,
+                        color: session.status == .waitingInput
+                            ? Palette.amber
+                            : Palette.inkTertiary
+                    )
                 }
-                Spacer()
+
+                Spacer(minLength: 8)
+
                 Button {
                     TerminalFocus.focus(session: session)
                 } label: {
-                    Image(systemName: "terminal")
-                        .font(.system(size: 11))
-                        .foregroundStyle(hoveringTerminal ? .white : .secondary)
-                        .scaleEffect(hoveringTerminal ? 1.15 : 1)
+                    Image(systemName: "arrow.up.forward.square")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(hoveringTerminal ? Palette.green : Palette.inkTertiary)
                 }
                 .buttonStyle(.plain)
                 .onHover { hovering in
-                    withAnimation(.spring(duration: 0.2)) { hoveringTerminal = hovering }
+                    withAnimation(.spring(duration: 0.18)) { hoveringTerminal = hovering }
                 }
                 .help("ir para o terminal")
             }
-            .frame(height: NotchView.rowHeight - 14)
+            .frame(height: NotchView.rowHeight - 16)
 
             if let pending = session.pending {
                 PermissionCard(pending: pending, hub: hub)
@@ -297,8 +303,29 @@ struct SessionRow: View {
                     )
             }
         }
-        .animation(.spring(duration: 0.3, bounce: 0.2), value: session.pending)
+        .animation(.spring(duration: 0.3, bounce: 0.15), value: session.pending)
         .animation(.easeInOut(duration: 0.25), value: session.lastAction)
+    }
+}
+
+/// Live "what the agent is doing" readout. First token bright (the tool),
+/// remainder dim — reads like a terminal, changes with a soft crossfade.
+struct ActionTicker: View {
+    let action: String
+
+    var body: some View {
+        let parts = action.split(separator: " ", maxSplits: 1)
+        return (
+            Text(String(parts.first ?? ""))
+                .foregroundColor(Palette.green.opacity(0.85))
+            + Text(parts.count > 1 ? " " + parts[1] : "")
+                .foregroundColor(Palette.inkSecondary)
+        )
+        .font(.system(size: 10, design: .monospaced))
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .id(action)
+        .transition(.opacity)
     }
 }
 
@@ -307,46 +334,50 @@ struct PermissionCard: View {
     @ObservedObject var hub: AgentHub
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                    .breathing(period: 1.0)
-                Text(pending.toolName)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.orange)
-                Spacer()
-                TimeoutRing(since: pending.receivedAt, total: 55)
-                    .frame(width: 12, height: 12)
+        HStack(alignment: .top, spacing: 0) {
+            // Accent spine — the card's "LED" edge.
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Palette.amber)
+                .frame(width: 2)
+                .breathing(period: 1.2)
+                .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    EtchedLabel(text: pending.toolName, color: Palette.amber)
+                    Spacer()
+                    TimeoutRing(since: pending.receivedAt, total: 55)
+                        .frame(width: 11, height: 11)
+                }
+                Text(pending.summary)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                HStack(spacing: 6) {
+                    DecisionButton(title: "Aprovar", style: .fill(Palette.green)) {
+                        hub.decide(requestId: pending.requestId, decision: .allow)
+                    }
+                    DecisionButton(title: "Negar", style: .outline(Palette.red)) {
+                        hub.decide(requestId: pending.requestId, decision: .deny)
+                    }
+                    DecisionButton(title: "No terminal", style: .ghost) {
+                        hub.decide(requestId: pending.requestId, decision: .ask)
+                    }
+                }
             }
-            Text(pending.summary)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(2)
-                .truncationMode(.middle)
-            HStack(spacing: 8) {
-                DecisionButton(title: "Aprovar", tint: .green) {
-                    hub.decide(requestId: pending.requestId, decision: .allow)
-                }
-                DecisionButton(title: "Negar", tint: .red) {
-                    hub.decide(requestId: pending.requestId, decision: .deny)
-                }
-                DecisionButton(title: "No terminal", tint: .white.opacity(0.7)) {
-                    hub.decide(requestId: pending.requestId, decision: .ask)
-                }
-            }
+            .padding(.leading, 10)
         }
         .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.orange.opacity(0.08))
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.white.opacity(0.045))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(Palette.hairline, lineWidth: 1)
                 )
         )
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
     }
 }
 
@@ -360,13 +391,13 @@ struct TimeoutRing: View {
             let elapsed = timeline.date.timeIntervalSince(since)
             let remaining = max(0, 1 - elapsed / total)
             Circle()
-                .stroke(Color.white.opacity(0.15), lineWidth: 2)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1.5)
                 .overlay(
                     Circle()
                         .trim(from: 0, to: remaining)
                         .stroke(
-                            remaining < 0.25 ? Color.red : Color.orange,
-                            style: StrokeStyle(lineWidth: 2, lineCap: .round)
+                            remaining < 0.25 ? Palette.red : Palette.amber,
+                            style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
                         )
                         .rotationEffect(.degrees(-90))
                 )
@@ -375,29 +406,66 @@ struct TimeoutRing: View {
 }
 
 struct DecisionButton: View {
+    enum Style {
+        case fill(Color)
+        case outline(Color)
+        case ghost
+    }
+
     let title: String
-    let tint: Color
+    let style: Style
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(
-                    Capsule().fill(tint.opacity(hovering ? 0.45 : 0.22))
-                )
-                .overlay(
-                    Capsule().strokeBorder(tint.opacity(hovering ? 0.8 : 0.3), lineWidth: 1)
-                )
-                .foregroundStyle(tint)
-                .scaleEffect(hovering ? 1.06 : 1)
+                .font(.system(size: 10.5, weight: .semibold))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4.5)
+                .background(background)
+                .overlay(border)
+                .foregroundStyle(foreground)
+                .clipShape(Capsule())
+                .scaleEffect(hovering ? 1.05 : 1)
         }
         .buttonStyle(.plain)
         .onHover { h in
-            withAnimation(.spring(duration: 0.18)) { hovering = h }
+            withAnimation(.spring(duration: 0.16)) { hovering = h }
+        }
+    }
+
+    private var background: some View {
+        Group {
+            switch style {
+            case .fill(let color):
+                Capsule().fill(color.opacity(hovering ? 1 : 0.85))
+            case .outline(let color):
+                Capsule().fill(color.opacity(hovering ? 0.22 : 0.0))
+            case .ghost:
+                Capsule().fill(Color.white.opacity(hovering ? 0.10 : 0.0))
+            }
+        }
+    }
+
+    private var border: some View {
+        Group {
+            switch style {
+            case .fill:
+                Capsule().strokeBorder(.clear, lineWidth: 1)
+            case .outline(let color):
+                Capsule().strokeBorder(color.opacity(hovering ? 0.9 : 0.45), lineWidth: 1)
+            case .ghost:
+                Capsule().strokeBorder(Palette.hairline, lineWidth: 1)
+            }
+        }
+    }
+
+    private var foreground: Color {
+        switch style {
+        case .fill: .black
+        case .outline(let color): color
+        case .ghost: Palette.inkSecondary
         }
     }
 }

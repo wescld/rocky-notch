@@ -11,7 +11,26 @@ let connectTimeoutMs: Int32 = 50
 // (passthrough) instead of being killed by the agent CLI.
 let decisionDeadline = Date().addingTimeInterval(58)
 
-func failOpen() -> Never { exit(0) }
+/// Debug trail at ~/Library/Application Support/vibenotch/hook.log.
+/// Best-effort only — logging must never affect the fail-open contract.
+func debugLog(_ message: String) {
+    let path = (IPC.socketPath() as NSString).deletingLastPathComponent + "/hook.log"
+    let line = "\(ISO8601DateFormatter().string(from: Date())) [\(ProcessInfo.processInfo.processIdentifier)] \(message)\n"
+    if let handle = FileHandle(forWritingAtPath: path) {
+        if (try? handle.seekToEnd()) ?? 0 > 1 << 20 {
+            try? handle.truncate(atOffset: 0)
+        }
+        try? handle.write(contentsOf: Data(line.utf8))
+        try? handle.close()
+    } else {
+        try? Data(line.utf8).write(to: URL(fileURLWithPath: path))
+    }
+}
+
+func failOpen(_ reason: String) -> Never {
+    debugLog("fail-open: \(reason)")
+    exit(0)
+}
 
 // `--agent <name>` identifies the calling CLI (default claude-code).
 var agent = "claude-code"
@@ -22,31 +41,39 @@ if let flag = args.firstIndex(of: "--agent"), flag + 1 < args.count {
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {
-    failOpen()
+    failOpen("decode: \(String(data: input.prefix(300), encoding: .utf8) ?? "binário")")
 }
+debugLog("evento \(event.hookEventName) sessão=\(event.sessionId) agente=\(agent) tool=\(event.toolName ?? "-") subagent=\(event.agentId ?? "-")")
 
 let envelope = HookEnvelope(agent: agent, event: event)
-guard
-    let line = try? NDJSON.encodeLine(envelope),
-    let client = SocketClient.connect(path: IPC.socketPath(), timeoutMs: connectTimeoutMs),
-    client.send(line)
-else {
-    failOpen()
+guard let line = try? NDJSON.encodeLine(envelope) else {
+    failOpen("encode")
+}
+guard let client = SocketClient.connect(path: IPC.socketPath(), timeoutMs: connectTimeoutMs) else {
+    failOpen("connect")
+}
+guard client.send(line) else {
+    failOpen("send")
 }
 defer { client.closeSocket() }
 
 // Fire-and-forget events end here; only PermissionRequest waits for a reply.
 guard event.kind == .permissionRequest else {
-    failOpen()
+    exit(0)
 }
 
+guard let replyLine = client.readLine(deadline: decisionDeadline) else {
+    failOpen("sem resposta até o deadline")
+}
 guard
-    let replyLine = client.readLine(deadline: decisionDeadline),
     let reply = try? NDJSON.decode(DecisionMessage.self, from: replyLine),
-    reply.requestId == envelope.requestId,
-    let output = PermissionRequestOutput.stdout(for: reply.decision)
+    reply.requestId == envelope.requestId
 else {
-    failOpen()
+    failOpen("resposta inválida")
+}
+debugLog("decisão \(reply.decision.rawValue) sessão=\(event.sessionId)")
+guard let output = PermissionRequestOutput.stdout(for: reply.decision) else {
+    exit(0)
 }
 
 FileHandle.standardOutput.write(output)
