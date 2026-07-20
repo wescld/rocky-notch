@@ -60,11 +60,17 @@ prompt appears. Rocky can never block your work.
 
 ## Install
 
-Build from source (Swift 5.10+, macOS 14+):
+**[Download the latest release](https://github.com/wescld/rocky-notch/releases/latest)**, unzip and move `Rocky.app` to Applications.
+
+Release builds are not notarized yet: on first launch, go to System
+Settings → Privacy & Security → **Open Anyway** (or run
+`xattr -d com.apple.quarantine /Applications/Rocky.app`).
+
+Or build from source (Swift 5.10+, macOS 14+):
 
 ```sh
-git clone <repo-url>
-cd rocky
+git clone https://github.com/wescld/rocky-notch.git
+cd rocky-notch
 make run
 ```
 
