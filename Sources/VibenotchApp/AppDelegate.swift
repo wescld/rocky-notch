@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SwiftUI
 import VibenotchCore
 
 @MainActor
@@ -7,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var iconObservation: AnyCancellable?
     private var notchController: NotchWindowController?
+    private let settings = SettingsWindowController()
+    private var defaultsObserver: AnyCancellable?
     private let integrations: [AgentIntegration] = [.claudeCode, .codex]
     let hub = AgentHub()
 
@@ -16,11 +19,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hub.start()
         installAutoDecideForTesting()
         wireAlerts()
-        if ProcessInfo.processInfo.environment["VIBENOTCH_HEADLESS"] == nil {
-            notchController = NotchWindowController(hub: hub)
-        }
         setUpStatusItem()
+        applyDisplayMode()
+        defaultsObserver = NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyDisplayMode() }
         healStaleHookPathIfNeeded()
+    }
+
+    private func applyDisplayMode() {
+        guard ProcessInfo.processInfo.environment["VIBENOTCH_HEADLESS"] == nil else { return }
+        switch Preferences.displayMode {
+        case .notch:
+            if notchController == nil {
+                notchController = NotchWindowController(hub: hub)
+            }
+            notchController?.setVisible(true)
+        case .menuBar:
+            notchController?.setVisible(false)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -79,17 +97,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Rocky \(Vibenotch.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
+        // Menu-bar mode: the session console lives inside the menu itself.
+        if Preferences.displayMode == .menuBar {
+            let listItem = NSMenuItem()
+            let list = SessionListView(hub: hub)
+                .frame(width: 400)
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.black)
+                )
+                .padding(.horizontal, 6)
+                .colorScheme(.dark)
+            listItem.view = NSHostingView(rootView: list)
+            menu.addItem(listItem)
+            menu.addItem(.separator())
+        }
+
         for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
             let item: NSMenuItem
             if integration.isInstalled {
                 item = NSMenuItem(
-                    title: "Remover integração do \(integration.displayName) ✓",
+                    title: "Remove \(integration.displayName) integration ✓",
                     action: #selector(toggleIntegration(_:)),
                     keyEquivalent: ""
                 )
             } else {
                 item = NSMenuItem(
-                    title: "Instalar integração com \(integration.displayName)…",
+                    title: "Install \(integration.displayName) integration…",
                     action: #selector(toggleIntegration(_:)),
                     keyEquivalent: ""
                 )
@@ -99,11 +133,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        let settingsItem = NSMenuItem(
+            title: "Settings…",
+            action: #selector(openSettings),
+            keyEquivalent: ","
+        )
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(
             withTitle: "Quit Rocky",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
+    }
+
+    @objc private func openSettings() {
+        settings.show(hub: hub, integrations: integrations)
     }
 
     @objc private func toggleIntegration(_ sender: NSMenuItem) {
@@ -114,15 +159,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 try integration.uninstall()
             } else {
                 let alert = NSAlert()
-                alert.messageText = "Instalar integração com o \(integration.displayName)?"
+                alert.messageText = "Install the \(integration.displayName) integration?"
                 alert.informativeText = """
-                O Rocky vai adicionar hooks a \(integration.configURL.path) \
-                (um backup .vibenotch-bak é criado). Sessões novas passam a \
-                aparecer no notch, com aprovação de permissões. Se o Rocky \
-                não estiver rodando, nada muda no seu fluxo.
+                Rocky will add hooks to \(integration.configURL.path) \
+                (a .vibenotch-bak backup is created). New sessions will show \
+                up with permission approval. If Rocky isn't running, nothing \
+                changes in your workflow.
                 """
-                alert.addButton(withTitle: "Instalar")
-                alert.addButton(withTitle: "Cancelar")
+                alert.addButton(withTitle: "Install")
+                alert.addButton(withTitle: "Cancel")
                 NSApp.activate()
                 guard alert.runModal() == .alertFirstButtonReturn else { return }
                 try integration.install()

@@ -7,8 +7,8 @@ enum IntegrationError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unparseableSettings(let path):
-            "O arquivo \(path) não pôde ser lido como JSON. "
-                + "Nada foi alterado — corrija o arquivo e tente de novo."
+            "\(path) could not be parsed as JSON. "
+                + "Nothing was changed. Fix the file and try again."
         }
     }
 }

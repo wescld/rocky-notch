@@ -67,6 +67,7 @@ final class RockyVoice {
     }
 
     private func playFile(_ name: String) -> Bool {
+        guard Preferences.soundsEnabled else { return true }
         guard let filePlayer = filePlayers[name] else { return false }
         filePlayer.currentTime = 0
         filePlayer.play()
@@ -76,7 +77,7 @@ final class RockyVoice {
     // MARK: - Synthesis
 
     private func play(phrase: [(notes: [Double], duration: Double)]) {
-        guard ready else { return }
+        guard Preferences.soundsEnabled, ready else { return }
         guard let buffer = render(phrase: phrase) else { return }
         player.scheduleBuffer(buffer, at: nil, options: [])
     }

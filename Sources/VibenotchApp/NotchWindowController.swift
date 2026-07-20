@@ -37,7 +37,15 @@ final class NotchWindowController {
         panel.hidesOnDeactivate = false
         self.panel = panel
 
-        let root = NotchView(hub: hub, state: state)
+        let screen = NSScreen.screens.first { $0.safeAreaInsets.top > 0 }
+            ?? NSScreen.main ?? NSScreen.screens[0]
+        let m = Self.metrics(for: screen)
+        let root = NotchView(
+            hub: hub,
+            state: state,
+            notchWidth: m.notchWidth,
+            notchHeight: m.hasNotch ? m.notchHeight : 0
+        )
         let hosting = NSHostingView(rootView: root)
         // Frame-based layout only: an NSHostingView constrained directly as
         // contentView of a borderless panel enters an update-constraints loop
@@ -157,5 +165,13 @@ final class NotchWindowController {
     /// Expand when a permission arrives so it's visible without hover.
     func revealPending() {
         state.expanded = true
+    }
+
+    func setVisible(_ visible: Bool) {
+        if visible {
+            panel.orderFrontRegardless()
+        } else {
+            panel.orderOut(nil)
+        }
     }
 }

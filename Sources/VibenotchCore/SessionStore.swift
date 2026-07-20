@@ -53,7 +53,7 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
-        guard let cwd else { return "sessão" }
+        guard let cwd else { return "session" }
         return (cwd as NSString).lastPathComponent
     }
 }
@@ -122,7 +122,7 @@ public struct SessionStore: Equatable, Sendable {
             session.status = .waitingPermission
             session.pending = PendingPermission(
                 requestId: envelope.requestId,
-                toolName: event.toolName ?? "ferramenta",
+                toolName: event.toolName ?? "tool",
                 summary: event.toolSummary ?? event.toolName ?? "",
                 receivedAt: date,
                 toolInput: event.toolInput

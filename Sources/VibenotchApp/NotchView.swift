@@ -7,6 +7,8 @@ import VibenotchCore
 struct NotchView: View {
     @ObservedObject var hub: AgentHub
     @ObservedObject var state: NotchUIState
+    var notchWidth: CGFloat = 200
+    var notchHeight: CGFloat = 37
 
     static let expandedWidth: CGFloat = 430
     static let rowHeight: CGFloat = 40
@@ -23,7 +25,9 @@ struct NotchView: View {
         pendingDiffLines: Int = 0
     ) -> CGSize {
         if !expanded {
-            return CGSize(width: notchWidth + wingWidth * 2, height: notchHeight)
+            // Slightly taller than the physical notch so the glass rim on the
+            // bottom edge is fully visible below the hardware cutout.
+            return CGSize(width: notchWidth + wingWidth * 2, height: notchHeight + 5)
         }
         let card = hasPending ? cardHeight + CGFloat(pendingDiffLines) * 21 : 26
         let rows = sessionCount == 0
@@ -66,22 +70,22 @@ struct NotchView: View {
     }
 
     private var surface: some View {
-        let shape = UnevenRoundedRectangle(
-            cornerRadii: .init(bottomLeading: 18, bottomTrailing: 18),
-            style: .continuous
-        )
+        let shape = state.expanded
+            ? NotchShape(topRadius: 14, bottomRadius: 18, convexTop: true)
+            : NotchShape(topRadius: 7, bottomRadius: 18)
         return ZStack {
             shape.fill(.black)
             // Liquid-glass lip: a light rim that only exists on the lateral
             // and bottom edges (clear at the top, so the fusion with the
             // physical notch stays seamless) — reads as a glass edge
             // catching light.
-            shape.strokeBorder(
+            shape.stroke(
                 LinearGradient(
                     stops: [
                         .init(color: .clear, location: 0),
-                        .init(color: .white.opacity(0.10), location: 0.55),
-                        .init(color: .white.opacity(state.expanded ? 0.32 : 0.26), location: 1),
+                        .init(color: .white.opacity(0.16), location: 0.10),
+                        .init(color: .white.opacity(0.20), location: 0.55),
+                        .init(color: .white.opacity(state.expanded ? 0.34 : 0.28), location: 1),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -90,7 +94,6 @@ struct NotchView: View {
             )
         }
         .compositingGroup()
-        .shadow(color: .black.opacity(state.expanded ? 0.5 : 0), radius: 16, y: 8)
     }
 
     // MARK: - Collapsed
@@ -141,6 +144,87 @@ struct NotchView: View {
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
     private var expandedContent: some View {
+        SessionListView(hub: hub)
+            .padding(.top, 28)
+            .padding(.horizontal, 12)
+            .colorScheme(.dark)
+    }
+}
+
+/// The real notch silhouette: concave flares at the top (where the panel
+/// meets the menu bar, like the hardware cutout) and convex rounded bottom
+/// corners. The top edge stays straight for seamless fusion.
+struct NotchShape: Shape {
+    var topRadius: CGFloat
+    var bottomRadius: CGFloat
+    /// false = concave flare (fused with the hardware notch, collapsed);
+    /// true = regular convex rounding (floating card, expanded).
+    var convexTop: Bool = false
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let t = topRadius
+        let b = bottomRadius
+        if convexTop {
+            p.move(to: CGPoint(x: rect.minX + t, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX - t, y: rect.minY))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY + t),
+                control: CGPoint(x: rect.maxX, y: rect.minY)
+            )
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - b))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.maxX - b, y: rect.maxY),
+                control: CGPoint(x: rect.maxX, y: rect.maxY)
+            )
+            p.addLine(to: CGPoint(x: rect.minX + b, y: rect.maxY))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX, y: rect.maxY - b),
+                control: CGPoint(x: rect.minX, y: rect.maxY)
+            )
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + t))
+            p.addQuadCurve(
+                to: CGPoint(x: rect.minX + t, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            p.closeSubpath()
+            return p
+        }
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX + t, y: rect.minY + t),
+            control: CGPoint(x: rect.minX + t, y: rect.minY)
+        )
+        p.addLine(to: CGPoint(x: rect.minX + t, y: rect.maxY - b))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.minX + t + b, y: rect.maxY),
+            control: CGPoint(x: rect.minX + t, y: rect.maxY)
+        )
+        p.addLine(to: CGPoint(x: rect.maxX - t - b, y: rect.maxY))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX - t, y: rect.maxY - b),
+            control: CGPoint(x: rect.maxX - t, y: rect.maxY)
+        )
+        p.addLine(to: CGPoint(x: rect.maxX - t, y: rect.minY + t))
+        p.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: rect.maxX - t, y: rect.minY)
+        )
+        p.closeSubpath()
+        return p
+    }
+}
+
+
+/// The session console: insights header + rows + pending cards. Shared by
+/// the notch panel and the menu bar mode.
+struct SessionListView: View {
+    @ObservedObject var hub: AgentHub
+
+    private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
+    private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Color.clear.frame(height: 6)
             if !hub.sessions.isEmpty,
@@ -167,11 +251,11 @@ struct NotchView: View {
             if hub.sessions.isEmpty {
                 VStack(spacing: 10) {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 64)
-                    Text("Rocky de plantão. Rode claude ou codex num terminal.")
+                    Text("Rocky on watch. Run claude or codex in a terminal.")
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                .frame(maxWidth: .infinity, minHeight: Self.rowHeight + 76)
+                .frame(maxWidth: .infinity, minHeight: NotchView.rowHeight + 76)
             } else {
                 ForEach(hub.sessions) { session in
                     if session.pending != nil {
@@ -185,9 +269,6 @@ struct NotchView: View {
             }
             Color.clear.frame(height: 8)
         }
-        .padding(.top, 28)
-        .padding(.horizontal, 12)
-        .colorScheme(.dark)
     }
 }
 
@@ -241,7 +322,7 @@ enum SessionMeta {
 
     static func elapsed(_ session: AgentSession) -> String {
         let minutes = max(0, Int(Date().timeIntervalSince(session.lastEventAt) / 60))
-        if minutes < 1 { return "agora" }
+        if minutes < 1 { return "now" }
         if minutes < 60 { return "\(minutes)m" }
         return "\(minutes / 60)h\(minutes % 60 > 0 ? "\(minutes % 60)m" : "")"
     }
@@ -266,11 +347,11 @@ struct SessionRow: View {
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
                 if session.status == .idle {
-                    Text("terminou · clique pra ir")
+                    Text("done · click to jump")
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.green)
                 } else if session.status == .waitingInput {
-                    Text("sua vez no terminal")
+                    Text("your turn in the terminal")
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.amber)
                 } else if let action = session.lastAction {
@@ -323,7 +404,7 @@ struct PendingSessionCard: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(Palette.ink)
                             .lineLimit(1)
-                        Text("Rocky pergunta: \(pending.toolName)?")
+                        Text("Rocky asks: \(pending.toolName)?")
                             .font(.system(size: 10.5))
                             .foregroundStyle(Palette.amber)
                     }
@@ -350,13 +431,13 @@ struct PendingSessionCard: View {
                         )
                 }
                 HStack(spacing: 7) {
-                    ActionButton(title: "Aprovar", style: .fill(Palette.green)) {
+                    ActionButton(title: "Approve", style: .fill(Palette.green)) {
                         hub.decide(requestId: pending.requestId, decision: .allow)
                     }
-                    ActionButton(title: "Negar", style: .tint(Palette.red)) {
+                    ActionButton(title: "Deny", style: .tint(Palette.red)) {
                         hub.decide(requestId: pending.requestId, decision: .deny)
                     }
-                    ActionButton(title: "No terminal", style: .neutral) {
+                    ActionButton(title: "In terminal", style: .neutral) {
                         hub.decide(requestId: pending.requestId, decision: .ask)
                     }
                     Spacer()
@@ -395,7 +476,7 @@ struct DiffPreview: View {
                     Text("−\(diff.removals)").foregroundStyle(Palette.red)
                 }
                 if diff.lines.count > Self.maxLines {
-                    Text("· \(diff.lines.count - Self.maxLines) linhas ocultas")
+                    Text("· \(diff.lines.count - Self.maxLines) more lines")
                         .foregroundStyle(Palette.inkTertiary)
                 }
             }

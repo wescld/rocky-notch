@@ -41,9 +41,9 @@ if let flag = args.firstIndex(of: "--agent"), flag + 1 < args.count {
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {
-    failOpen("decode: \(String(data: input.prefix(300), encoding: .utf8) ?? "binário")")
+    failOpen("decode: \(String(data: input.prefix(300), encoding: .utf8) ?? "binary")")
 }
-debugLog("evento \(event.hookEventName) sessão=\(event.sessionId) agente=\(agent) tool=\(event.toolName ?? "-") subagent=\(event.agentId ?? "-")")
+debugLog("event \(event.hookEventName) session=\(event.sessionId) agent=\(agent) tool=\(event.toolName ?? "-") subagent=\(event.agentId ?? "-")")
 
 let envelope = HookEnvelope(agent: agent, event: event)
 guard let line = try? NDJSON.encodeLine(envelope) else {
@@ -63,15 +63,15 @@ guard event.kind == .permissionRequest else {
 }
 
 guard let replyLine = client.readLine(deadline: decisionDeadline) else {
-    failOpen("sem resposta até o deadline")
+    failOpen("no reply before deadline")
 }
 guard
     let reply = try? NDJSON.decode(DecisionMessage.self, from: replyLine),
     reply.requestId == envelope.requestId
 else {
-    failOpen("resposta inválida")
+    failOpen("invalid reply")
 }
-debugLog("decisão \(reply.decision.rawValue) sessão=\(event.sessionId)")
+debugLog("decision \(reply.decision.rawValue) session=\(event.sessionId)")
 guard let output = PermissionRequestOutput.stdout(for: reply.decision) else {
     exit(0)
 }

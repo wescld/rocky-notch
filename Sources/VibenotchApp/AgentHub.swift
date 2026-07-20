@@ -46,10 +46,10 @@ final class AgentHub: ObservableObject {
         do {
             try server.start()
         } catch IPCServer.StartError.anotherInstanceRunning {
-            serverError = "outra instância do Rocky já está rodando"
+            serverError = "another Rocky instance is already running"
             NSApp.terminate(nil)
         } catch {
-            serverError = "falha ao iniciar IPC: \(error)"
+            serverError = "failed to start IPC: \(error)"
         }
         pruneTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in
             Task { @MainActor [weak self] in
