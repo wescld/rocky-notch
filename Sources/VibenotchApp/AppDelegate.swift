@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var iconObservation: AnyCancellable?
     private var notchController: NotchWindowController?
+    private var menuBarPanel: MenuBarPanelController?
     private let settings = SettingsWindowController()
     private var defaultsObserver: AnyCancellable?
     private let integrations: [AgentIntegration] = [.claudeCode, .codex]
@@ -36,8 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 notchController = NotchWindowController(hub: hub)
             }
             notchController?.setVisible(true)
+            menuBarPanel?.hide()
         case .menuBar:
             notchController?.setVisible(false)
+            if menuBarPanel == nil {
+                menuBarPanel = MenuBarPanelController(hub: hub)
+            }
         }
     }
 
@@ -54,12 +59,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Status menu
 
+    private let statusMenu = NSMenu()
+
     private func setUpStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = Self.menuBarIcon()
-        let menu = NSMenu()
-        menu.delegate = self
-        item.menu = menu
+        statusMenu.delegate = self
+        // Clicks are handled manually: in menu-bar mode, left click opens the
+        // console card; right click (or notch mode) opens the menu.
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.target = self
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
 
         // Icon mirrors the fleet: normal → idle, filled+orange → needs you.
@@ -92,26 +102,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return image
     }
 
+    @objc private func statusItemClicked() {
+        let isRightClick = NSApp.currentEvent?.type == .rightMouseUp
+        if Preferences.displayMode == .menuBar, !isRightClick {
+            menuBarPanel?.toggle(relativeTo: statusItem?.button)
+            return
+        }
+        menuBarPanel?.hide()
+        statusItem?.menu = statusMenu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         menu.addItem(withTitle: "Rocky \(Vibenotch.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
-
-        // Menu-bar mode: the session console lives inside the menu itself.
-        if Preferences.displayMode == .menuBar {
-            let listItem = NSMenuItem()
-            let list = SessionListView(hub: hub)
-                .frame(width: 400)
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.black)
-                )
-                .padding(.horizontal, 6)
-                .colorScheme(.dark)
-            listItem.view = NSHostingView(rootView: list)
-            menu.addItem(listItem)
-            menu.addItem(.separator())
-        }
 
         for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
             let item: NSMenuItem
