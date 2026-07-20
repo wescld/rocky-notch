@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(withTitle: "vibenotch \(Vibenotch.version)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Rocky — vibenotch \(Vibenotch.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
         for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
@@ -138,11 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let previousPermission = hub.onPermissionRequest
         hub.onPermissionRequest = { [weak self] session in
             previousPermission?(session)
-            NSSound(named: "Glass")?.play()
+            RockyVoice.shared.question()
             self?.notchController?.revealPending()
         }
         hub.onSessionIdle = { _ in
-            NSSound(named: "Pop")?.play()
+            RockyVoice.shared.done()
         }
     }
 
