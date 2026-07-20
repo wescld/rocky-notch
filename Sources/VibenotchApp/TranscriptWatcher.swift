@@ -20,8 +20,8 @@ final class TranscriptWatcher {
     private let queue = DispatchQueue(label: "app.vibenotch.transcripts", qos: .utility)
     private var watches: [String: Watch] = [:]
 
-    /// Called on main with (sessionId, lastAction).
-    var onAction: ((String, String) -> Void)?
+    /// Called on main with (sessionId, update).
+    var onUpdate: ((String, TranscriptTail.Update) -> Void)?
 
     func watch(sessionId: String, path: String) {
         queue.async { [weak self] in
@@ -87,9 +87,10 @@ final class TranscriptWatcher {
         guard let lastNewline = buffer.lastIndex(of: 0x0A) else { return }
         watch.offset += UInt64(lastNewline + 1)
 
-        if let action = TranscriptTail.lastAction(in: buffer.subdata(in: 0..<(lastNewline + 1))) {
+        let update = TranscriptTail.scan(buffer.subdata(in: 0..<(lastNewline + 1)))
+        if update.lastAction != nil || update.tokens > 0 {
             DispatchQueue.main.async { [weak self] in
-                self?.onAction?(sessionId, action)
+                self?.onUpdate?(sessionId, update)
             }
         }
     }

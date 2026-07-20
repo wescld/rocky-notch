@@ -82,6 +82,24 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNotNil(store.sessions["s2"])
     }
 
+    func testActiveTimeAccumulatesWithCappedGaps() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop"), at: t0 + 120)
+        // Long overnight gap counts only the 5-minute cap.
+        store.apply(envelope("UserPromptSubmit"), at: t0 + 120 + 8 * 60 * 60)
+        XCTAssertEqual(store.sessions["s1"]?.activeSeconds, 120 + 5 * 60)
+    }
+
+    func testTokensAccumulate() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.addTokens(150, sessionId: "s1")
+        store.addTokens(50, sessionId: "s1")
+        store.addTokens(-10, sessionId: "s1")
+        XCTAssertEqual(store.sessions["s1"]?.tokens, 200)
+    }
+
     func testOrderedByRecency() {
         var store = SessionStore()
         store.apply(envelope("SessionStart", session: "old"), at: t0)

@@ -61,4 +61,15 @@ final class TranscriptTailTests: XCTestCase {
     func testEmptyChunkReturnsNil() {
         XCTAssertNil(TranscriptTail.lastAction(in: Data()))
     }
+
+    func testScanSumsUsageExcludingCacheReads() {
+        let data = chunk(
+            #"{"type":"assistant","message":{"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":30,"cache_read_input_tokens":9000},"content":[{"type":"text","text":"oi"}]}}"#,
+            #"{"type":"user","message":{"content":"x"}}"#,
+            #"{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":5},"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#
+        )
+        let update = TranscriptTail.scan(data)
+        XCTAssertEqual(update.tokens, 195)
+        XCTAssertEqual(update.lastAction, "Bash: ls")
+    }
 }

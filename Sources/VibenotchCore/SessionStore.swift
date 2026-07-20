@@ -37,6 +37,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var transcriptPath: String?
     /// Last meaningful action from the transcript ("Bash: npm test").
     public var lastAction: String?
+    /// Tokens spent this session (input + output + cache writes).
+    public var tokens: Int = 0
+    /// Accumulated "working" time: event gaps capped at 5 minutes.
+    public var activeSeconds: TimeInterval = 0
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
@@ -87,6 +91,12 @@ public struct SessionStore: Equatable, Sendable {
             transcriptPath: nil,
             lastAction: nil
         )
+        // Active time: count the gap since the last event, capped so long
+        // idle stretches don't inflate the number.
+        let gap = date.timeIntervalSince(session.lastEventAt)
+        if gap > 0 {
+            session.activeSeconds += min(gap, 5 * 60)
+        }
         session.lastEventAt = date
         session.hookPid = envelope.hookPid
         if let cwd = event.cwd { session.cwd = cwd }
@@ -132,6 +142,11 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func setLastAction(_ action: String, sessionId: String) {
         sessions[sessionId]?.lastAction = action
+    }
+
+    public mutating func addTokens(_ tokens: Int, sessionId: String) {
+        guard tokens > 0 else { return }
+        sessions[sessionId]?.tokens += tokens
     }
 
     /// Called when a pending request was answered or timed out.

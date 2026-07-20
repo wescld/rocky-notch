@@ -34,8 +34,11 @@ final class AgentHub: ObservableObject {
             // (cancelled or prompting at the terminal).
             self?.finishPending(requestId: requestId, fellBackToTerminal: true)
         }
-        transcripts.onAction = { [weak self] sessionId, action in
-            self?.store.setLastAction(action, sessionId: sessionId)
+        transcripts.onUpdate = { [weak self] sessionId, update in
+            if let action = update.lastAction {
+                self?.store.setLastAction(action, sessionId: sessionId)
+            }
+            self?.store.addTokens(update.tokens, sessionId: sessionId)
         }
     }
 

@@ -26,7 +26,7 @@ struct NotchView: View {
         }
         let rows = sessionCount == 0
             ? rowHeight + 84
-            : CGFloat(sessionCount) * rowHeight + (hasPending ? cardHeight : 26)
+            : CGFloat(sessionCount) * rowHeight + (hasPending ? cardHeight : 26) + 20
         let height = notchHeight + rows + 18
         return CGSize(
             width: max(expandedWidth, notchWidth + wingWidth * 2),
@@ -121,9 +121,34 @@ struct NotchView: View {
 
     // MARK: - Expanded
 
+    /// Aggregates for the insights header (sessions currently tracked).
+    private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
+    private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
+
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             Color.clear.frame(height: 6)
+            if !hub.sessions.isEmpty,
+               SessionMeta.tokens(totalTokens) != nil || SessionMeta.workTime(totalWork) != nil {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 8))
+                        .foregroundStyle(Palette.amber)
+                    if let tokens = SessionMeta.tokens(totalTokens) {
+                        Text(tokens).foregroundStyle(Palette.green)
+                    }
+                    if let work = SessionMeta.workTime(totalWork) {
+                        if SessionMeta.tokens(totalTokens) != nil {
+                            Text("·").foregroundStyle(Palette.inkTertiary)
+                        }
+                        Text(work).foregroundStyle(Palette.inkSecondary)
+                    }
+                    Spacer()
+                }
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .padding(.horizontal, 10)
+                .padding(.bottom, 4)
+            }
             if hub.sessions.isEmpty {
                 VStack(spacing: 10) {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 64)
@@ -171,6 +196,23 @@ struct Chip: View {
 }
 
 enum SessionMeta {
+    static func tokens(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        if count < 1000 { return "\(count) tok" }
+        if count < 1_000_000 {
+            return "\((Double(count) / 1000).formatted(.number.precision(.fractionLength(0))))k tok"
+        }
+        return "\((Double(count) / 1_000_000).formatted(.number.precision(.fractionLength(1))))M tok"
+    }
+
+    static func workTime(_ seconds: TimeInterval) -> String? {
+        let minutes = Int(seconds / 60)
+        guard minutes >= 1 else { return nil }
+        if minutes < 60 { return "\(minutes)min" }
+        let rest = minutes % 60
+        return rest > 0 ? "\(minutes / 60)h\(rest)min" : "\(minutes / 60)h"
+    }
+
     static func agentLabel(_ session: AgentSession) -> String {
         session.agent == "claude-code" ? "Claude" : session.agent.capitalized
     }
@@ -224,6 +266,9 @@ struct SessionRow: View {
             if session.status == .running {
                 EqualizerBars(tint: Palette.green)
                     .frame(width: 14, height: 9)
+            }
+            if let tokens = SessionMeta.tokens(session.tokens) {
+                Chip(text: tokens)
             }
             Chip(text: SessionMeta.agentLabel(session))
             if let terminal = SessionMeta.terminalLabel(session) {
