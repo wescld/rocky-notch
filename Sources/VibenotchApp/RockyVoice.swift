@@ -66,33 +66,36 @@ final class RockyVoice {
         ])
     }
 
-    // MARK: - UI feedback (always synthesized: instant, tiny)
+    // MARK: - UI feedback (always synthesized: instant, tiny, SUBTLE —
+    // these fire on every click, so they sit far below the event chimes)
+
+    private let uiGain = 0.16
 
     /// Neutral tick for small interactions.
     func tap() {
-        play(phrase: [(notes: [880.0], duration: 0.06)])
+        play(phrase: [(notes: [880.0], duration: 0.05)], gain: uiGain)
     }
 
     /// Happy rising chirp when the user approves.
     func approve() {
         play(phrase: [
-            (notes: [659.26, 783.99], duration: 0.08),
-            (notes: [987.77], duration: 0.12),
-        ])
+            (notes: [659.26, 783.99], duration: 0.07),
+            (notes: [987.77], duration: 0.10),
+        ], gain: uiGain * 1.4)
     }
 
     /// Low, short and final when the user denies.
     func deny() {
-        play(phrase: [(notes: [220.0, 174.61], duration: 0.16)])
+        play(phrase: [(notes: [220.0, 174.61], duration: 0.14)], gain: uiGain * 1.4)
     }
 
     /// Playful trill when someone pokes Rocky.
     func poke() {
         play(phrase: [
-            (notes: [783.99], duration: 0.06),
-            (notes: [987.77], duration: 0.06),
-            (notes: [1174.66], duration: 0.10),
-        ])
+            (notes: [783.99], duration: 0.05),
+            (notes: [987.77], duration: 0.05),
+            (notes: [1174.66], duration: 0.08),
+        ], gain: uiGain)
     }
 
     private func playFile(_ name: String) -> Bool {
@@ -105,13 +108,16 @@ final class RockyVoice {
 
     // MARK: - Synthesis
 
-    private func play(phrase: [(notes: [Double], duration: Double)]) {
+    private func play(phrase: [(notes: [Double], duration: Double)], gain: Double = 1.0) {
         guard Preferences.soundsEnabled, ready else { return }
-        guard let buffer = render(phrase: phrase) else { return }
+        guard let buffer = render(phrase: phrase, gain: gain) else { return }
         player.scheduleBuffer(buffer, at: nil, options: [])
     }
 
-    private func render(phrase: [(notes: [Double], duration: Double)]) -> AVAudioPCMBuffer? {
+    private func render(
+        phrase: [(notes: [Double], duration: Double)],
+        gain: Double = 1.0
+    ) -> AVAudioPCMBuffer? {
         let gap = 0.02
         let tail = 0.35
         let total = phrase.reduce(0) { $0 + $1.duration + gap } + tail
@@ -142,7 +148,7 @@ final class RockyVoice {
                     sample += 0.35 * sin(2 * .pi * note * 2 * t)
                     sample += 0.12 * sin(2 * .pi * note * 3 * t)
                 }
-                sample *= envelope / Double(chord.notes.count * 2)
+                sample *= gain * envelope / Double(chord.notes.count * 2)
                 samples[frame] += Float(sample)
             }
             start += chord.duration + gap
