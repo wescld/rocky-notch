@@ -19,11 +19,21 @@ final class RockyVoice {
     private var filePlayers: [String: AVAudioPlayer] = [:]
 
     private init() {
-        for name in ["rocky-question", "rocky-done", "rocky-attention"] {
+        // Event chimes speak up; per-click feedback whispers.
+        let volumes: [String: Float] = [
+            "rocky-question": 0.6,
+            "rocky-done": 0.6,
+            "rocky-attention": 0.6,
+            "rocky-tap": 0.22,
+            "rocky-approve-click": 0.30,
+            "rocky-deny-click": 0.30,
+            "rocky-poke": 0.25,
+        ]
+        for (name, volume) in volumes {
             if let url = Bundle.main.url(
                 forResource: name, withExtension: "mp3", subdirectory: "Sounds"
             ), let filePlayer = try? AVAudioPlayer(contentsOf: url) {
-                filePlayer.volume = 0.6
+                filePlayer.volume = volume
                 filePlayer.prepareToPlay()
                 filePlayers[name] = filePlayer
             }
@@ -73,11 +83,13 @@ final class RockyVoice {
 
     /// Neutral tick for small interactions.
     func tap() {
+        guard !playFile("rocky-tap") else { return }
         play(phrase: [(notes: [880.0], duration: 0.05)], gain: uiGain)
     }
 
     /// Happy rising chirp when the user approves.
     func approve() {
+        guard !playFile("rocky-approve-click") else { return }
         play(phrase: [
             (notes: [659.26, 783.99], duration: 0.07),
             (notes: [987.77], duration: 0.10),
@@ -86,11 +98,13 @@ final class RockyVoice {
 
     /// Low, short and final when the user denies.
     func deny() {
+        guard !playFile("rocky-deny-click") else { return }
         play(phrase: [(notes: [220.0, 174.61], duration: 0.14)], gain: uiGain * 1.4)
     }
 
     /// Playful trill when someone pokes Rocky.
     func poke() {
+        guard !playFile("rocky-poke") else { return }
         play(phrase: [
             (notes: [783.99], duration: 0.05),
             (notes: [987.77], duration: 0.05),
