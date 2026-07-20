@@ -579,6 +579,9 @@ struct SessionRow: View {
                     .fill(statusColor)
                     .frame(width: 7, height: 7)
                     .shadow(color: statusColor.opacity(0.7), radius: 2)
+                if session.status == .running {
+                    RockyAnimatedSprite(size: 18)
+                }
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(session.projectName)
@@ -603,9 +606,6 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 8)
-            if session.status == .running {
-                RockyAnimatedSprite(size: 18)
-            }
             if let tokens = SessionMeta.tokens(session.tokens) {
                 Chip(text: tokens)
             }
