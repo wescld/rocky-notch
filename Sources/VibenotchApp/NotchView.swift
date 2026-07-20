@@ -32,7 +32,7 @@ struct NotchView: View {
         let card = hasPending ? cardHeight + CGFloat(pendingDiffLines) * 21 : 26
         let rows = sessionCount == 0
             ? rowHeight + 84
-            : CGFloat(sessionCount) * rowHeight + card + 20
+            : CGFloat(sessionCount) * rowHeight + card + 20 + 26
         let height = notchHeight + rows + 18
         return CGSize(
             width: max(expandedWidth, notchWidth + wingWidth * 2),
@@ -273,9 +273,55 @@ struct SessionListView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
+                WalkingRocky()
+                    .padding(.horizontal, 8)
+                    .padding(.top, 2)
             }
             Color.clear.frame(height: 8)
         }
+    }
+}
+
+/// Rocky pacing back and forth under the session list, keeping watch.
+struct WalkingRocky: View {
+    var size: CGFloat = 22
+    /// Points per second of patrol speed.
+    var speed: Double = 26
+
+    private static var frames: [NSImage] = (0..<16).compactMap { index in
+        guard let url = Bundle.main.url(
+            forResource: "walk-\(index)", withExtension: "png", subdirectory: "Art"
+        ) else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let track = max(1, geo.size.width - size)
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
+                let t = timeline.date.timeIntervalSinceReferenceDate
+                // Triangle wave 0→1→0 across the track.
+                let cycle = (t * speed).truncatingRemainder(dividingBy: track * 2)
+                let goingRight = cycle < track
+                let x = goingRight ? cycle : track * 2 - cycle
+
+                Group {
+                    if Self.frames.isEmpty {
+                        RockySprite(state: "east", fallback: "south", size: size)
+                    } else {
+                        let frame = Int(t * 10) % Self.frames.count
+                        Image(nsImage: Self.frames[frame])
+                            .interpolation(.none)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: size, height: size)
+                    }
+                }
+                .scaleEffect(x: goingRight ? 1 : -1, y: 1)
+                .offset(x: x)
+            }
+        }
+        .frame(height: size)
     }
 }
 
