@@ -31,6 +31,9 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var lastEventAt: Date
     public var title: String?
     public var model: String?
+    /// PID of the GUI app (terminal/editor) hosting this session, resolved
+    /// from the hook's process ancestry while the hook is still alive.
+    public var terminalAppPid: Int32?
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
@@ -75,7 +78,8 @@ public struct SessionStore: Equatable, Sendable {
             pending: nil,
             lastEventAt: date,
             title: nil,
-            model: nil
+            model: nil,
+            terminalAppPid: nil
         )
         session.lastEventAt = date
         session.hookPid = envelope.hookPid
@@ -111,6 +115,10 @@ public struct SessionStore: Equatable, Sendable {
         }
 
         sessions[event.sessionId] = session
+    }
+
+    public mutating func setTerminalApp(pid: Int32, sessionId: String) {
+        sessions[sessionId]?.terminalAppPid = pid
     }
 
     /// Called when a pending request was answered or timed out.

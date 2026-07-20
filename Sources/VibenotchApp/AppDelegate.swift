@@ -4,12 +4,16 @@ import VibenotchCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    private var notchController: NotchWindowController?
     let hub = AgentHub()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         hub.start()
         installAutoDecideForTesting()
+        if ProcessInfo.processInfo.environment["VIBENOTCH_HEADLESS"] == nil {
+            notchController = NotchWindowController(hub: hub)
+        }
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(

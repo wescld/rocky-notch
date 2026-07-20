@@ -62,8 +62,14 @@ final class AgentHub: ObservableObject {
         finishPending(requestId: requestId)
     }
 
+    /// Resolves the hook's GUI ancestor; injectable for tests.
+    var resolveTerminalApp: (Int32) -> Int32? = { TerminalFocus.guiAncestor(of: $0) }
+
     private func handle(_ envelope: HookEnvelope) {
         store.apply(envelope, at: Date())
+        if let guiPid = resolveTerminalApp(envelope.hookPid) {
+            store.setTerminalApp(pid: guiPid, sessionId: envelope.event.sessionId)
+        }
 
         switch envelope.event.kind {
         case .permissionRequest:
