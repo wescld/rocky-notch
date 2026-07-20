@@ -17,8 +17,10 @@ app: build
 	printf 'APPL????' > $(APP)/Contents/PkgInfo
 	cp $(BUILD_DIR)/Vibenotch $(APP)/Contents/MacOS/Vibenotch
 	cp $(BUILD_DIR)/vibenotch-hook $(APP)/Contents/MacOS/vibenotch-hook
-	mkdir -p $(APP)/Contents/Resources/Sounds
+	mkdir -p $(APP)/Contents/Resources/Sounds $(APP)/Contents/Resources/Art
 	cp Support/Sounds/*.mp3 $(APP)/Contents/Resources/Sounds/
+	cp Support/Art/rocky/*.png $(APP)/Contents/Resources/Art/
+	if [ -f Support/AppIcon.icns ]; then cp Support/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns; fi
 	codesign --force --deep --sign - $(APP)
 
 run: app

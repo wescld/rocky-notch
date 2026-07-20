@@ -23,7 +23,9 @@ struct NotchView: View {
         if !expanded {
             return CGSize(width: notchWidth + wingWidth * 2, height: notchHeight)
         }
-        let rows = CGFloat(max(sessionCount, 1)) * rowHeight
+        let rows = sessionCount == 0
+            ? rowHeight + 30
+            : CGFloat(sessionCount) * rowHeight
         let card: CGFloat = hasPending ? cardHeight : 0
         let height = notchHeight + rows + card + 20
         return CGSize(
@@ -122,13 +124,15 @@ struct NotchView: View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: 10)
             if hub.sessions.isEmpty {
-                VStack(spacing: 4) {
-                    EtchedLabel(text: "sem sessões", color: Palette.inkTertiary)
+                VStack(spacing: 5) {
+                    RockySprite(state: "rocky-sleeping", fallback: "south", size: 34)
+                        .breathing(period: 3.5)
+                    EtchedLabel(text: "rocky de plantão", color: Palette.inkTertiary)
                     Text("rode claude ou codex num terminal")
                         .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(Palette.inkTertiary)
                 }
-                .frame(maxWidth: .infinity, minHeight: Self.rowHeight)
+                .frame(maxWidth: .infinity, minHeight: Self.rowHeight + 30)
             } else {
                 ForEach(Array(hub.sessions.enumerated()), id: \.element.id) { index, session in
                     if index > 0 {
@@ -170,6 +174,35 @@ private struct BreathingModifier: ViewModifier {
 extension View {
     func breathing(period: Double = 1.2) -> some View {
         modifier(BreathingModifier(period: period))
+    }
+}
+
+/// Rocky sprite from the bundled pixel art, rendered crisp (no smoothing).
+/// Tries the named state first, then the fallback rotation frame.
+struct RockySprite: View {
+    let state: String
+    let fallback: String
+    let size: CGFloat
+
+    private var image: NSImage? {
+        for name in [state, fallback] {
+            if let url = Bundle.main.url(
+                forResource: name, withExtension: "png", subdirectory: "Art"
+            ), let img = NSImage(contentsOf: url) {
+                return img
+            }
+        }
+        return nil
+    }
+
+    var body: some View {
+        if let image {
+            Image(nsImage: image)
+                .interpolation(.none)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+        }
     }
 }
 
@@ -344,6 +377,8 @@ struct PermissionCard: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
+                    RockySprite(state: "rocky-alert", fallback: "south", size: 16)
+                        .breathing(period: 1.2)
                     EtchedLabel(text: pending.toolName, color: Palette.amber)
                     Spacer()
                     TimeoutRing(since: pending.receivedAt, total: 55)
