@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ), let image = NSImage(contentsOf: url) else {
             return NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "Rocky")
         }
-        image.size = NSSize(width: 18, height: 18)
+        image.size = NSSize(width: 16, height: 16)
         image.isTemplate = true
         return image
     }
