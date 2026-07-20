@@ -1,5 +1,5 @@
 import AppKit
-import VibenotchCore
+import RockyCore
 
 /// Best-effort "bring the terminal here". The GUI ancestor must be resolved
 /// at event time (the hook process dies right after the exchange); focusing

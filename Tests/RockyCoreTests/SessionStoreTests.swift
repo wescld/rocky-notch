@@ -1,5 +1,5 @@
 import XCTest
-@testable import VibenotchCore
+@testable import RockyCore
 
 final class SessionStoreTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_000_000)

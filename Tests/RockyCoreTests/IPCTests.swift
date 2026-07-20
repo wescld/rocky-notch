@@ -1,5 +1,5 @@
 import XCTest
-@testable import VibenotchCore
+@testable import RockyCore
 
 final class IPCTests: XCTestCase {
     func testEnvelopeRoundTrip() throws {
@@ -50,7 +50,7 @@ final class IPCTests: XCTestCase {
     func testSocketPath() {
         XCTAssertEqual(
             IPC.socketPath(home: "/Users/w"),
-            "/Users/w/Library/Application Support/vibenotch/vibenotch.sock"
+            "/Users/w/Library/Application Support/rocky/rocky.sock"
         )
     }
 }

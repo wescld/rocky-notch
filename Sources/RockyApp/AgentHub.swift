@@ -1,6 +1,6 @@
 import AppKit
 import Combine
-import VibenotchCore
+import RockyCore
 
 /// Main-thread source of truth for the UI. Owns the SessionStore state
 /// machine, decision timeouts, and the IPC server wiring.

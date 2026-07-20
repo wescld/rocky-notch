@@ -1,13 +1,18 @@
 import Foundation
 
-/// NDJSON messages between vibenotch-hook (client) and the app (server).
+/// NDJSON messages between rocky-hook (client) and the app (server).
 ///
 /// Flow: the hook sends exactly one `HookEnvelope` line. For fire-and-forget
 /// events it then exits. For PermissionRequest it blocks reading one
 /// `DecisionMessage` line back.
 public enum IPC {
-    public static let socketDirectory = "Library/Application Support/vibenotch"
-    public static let socketName = "vibenotch.sock"
+    public static let socketDirectory = "Library/Application Support/rocky"
+    public static let socketName = "rocky.sock"
+
+    /// Pre-rename install dir; the app deletes it on launch.
+    public static func legacyDirectory(home: String = NSHomeDirectory()) -> String {
+        (home as NSString).appendingPathComponent("Library/Application Support/vibenotch")
+    }
 
     public static func socketPath(home: String = NSHomeDirectory()) -> String {
         (home as NSString)

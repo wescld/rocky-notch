@@ -1,5 +1,5 @@
 import XCTest
-@testable import VibenotchCore
+@testable import RockyCore
 
 final class HookEventTests: XCTestCase {
     func decode(_ json: String) throws -> HookEvent {

@@ -1,7 +1,7 @@
 import Foundation
-import VibenotchCore
+import RockyCore
 
-/// Unix-domain-socket server for vibenotch-hook connections.
+/// Unix-domain-socket server for rocky-hook connections.
 ///
 /// Threading: all socket work happens on `queue`; envelopes are delivered to
 /// `onEnvelope` on the main queue. Replies come back via `reply(_:to:)`.

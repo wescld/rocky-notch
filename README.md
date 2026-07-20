@@ -38,7 +38,7 @@ Rocky integrates through the agents' **official hooks APIs**, not terminal
 injection or screen scraping. The approval flow:
 
 ```
-Claude Code ── PermissionRequest hook ──▶ vibenotch-hook ── unix socket ──▶ Rocky
+Claude Code ── PermissionRequest hook ──▶ rocky-hook ── unix socket ──▶ Rocky
      ◀── allow / deny ◀───────────────────────────────────◀── you click
 ```
 
@@ -84,16 +84,16 @@ integration removes only Rocky's entries.
 ## Development
 
 ```sh
-make test               # unit tests (VibenotchCore)
+make test               # unit tests (RockyCore)
 Tests/integration.sh    # end-to-end harness: real hook against the real app
 make app                # build dist/Rocky.app (ad-hoc signed)
 ```
 
-- `Sources/VibenotchCore` - event models, IPC protocol, session state
+- `Sources/RockyCore` - event models, IPC protocol, session state
   machine, settings merge. Pure and tested.
-- `Sources/VibenotchHook` - the tiny CLI executed by agent hooks.
+- `Sources/RockyHook` - the tiny CLI executed by agent hooks.
   Aggressive deadlines, fail-open everywhere.
-- `Sources/VibenotchApp` - the app: IPC server, session hub, notch UI,
+- `Sources/RockyApp` - the app: IPC server, session hub, notch UI,
   agent integrations.
 
 ## License

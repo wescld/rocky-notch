@@ -1,8 +1,8 @@
 import XCTest
-@testable import VibenotchCore
+@testable import RockyCore
 
 final class ClaudeSettingsMergerTests: XCTestCase {
-    let binary = "/Applications/Vibenotch.app/Contents/MacOS/vibenotch-hook"
+    let binary = "/Applications/Vibenotch.app/Contents/MacOS/rocky-hook"
 
     func parse(_ data: Data) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -95,7 +95,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
             settings: out, hookBinaryPath: binary, events: ClaudeSettingsMerger.claudeEvents
         ))
         XCTAssertFalse(ClaudeSettingsMerger.isCurrent(
-            settings: out, hookBinaryPath: "/moved/vibenotch-hook",
+            settings: out, hookBinaryPath: "/moved/rocky-hook",
             events: ClaudeSettingsMerger.claudeEvents
         ))
         // Config antiga sem UserPromptSubmit não é current.
@@ -122,7 +122,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
     }
 
     func testPathWithSpacesIsQuoted() throws {
-        let spacedBinary = "/Applications/My Apps/Vibenotch.app/Contents/MacOS/vibenotch-hook"
+        let spacedBinary = "/Applications/My Apps/Vibenotch.app/Contents/MacOS/rocky-hook"
         let out = try ClaudeSettingsMerger.merge(settings: nil, hookBinaryPath: spacedBinary)
         let hooks = try XCTUnwrap(try parse(out)["hooks"] as? [String: Any])
         let group = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first)

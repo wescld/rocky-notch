@@ -16,7 +16,7 @@ enum Palette {
     static let inkTertiary = Color.white.opacity(0.30)
     static let hairline = Color.white.opacity(0.08)
 
-    static func status(_ status: VibenotchCore.AgentSession.Status) -> Color {
+    static func status(_ status: RockyCore.AgentSession.Status) -> Color {
         switch status {
         case .running: green
         case .waitingPermission: amber
@@ -26,7 +26,7 @@ enum Palette {
     }
 }
 
-import VibenotchCore
+import RockyCore
 
 /// Micro-label in "etched hardware" style: uppercase, tracked, tiny.
 struct EtchedLabel: View {

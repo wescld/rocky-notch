@@ -5,7 +5,7 @@ import Foundation
 /// (`~/.claude/settings.json`, hooks as one key among many) and Codex
 /// (`~/.codex/hooks.json`, hooks as the only key). Rules:
 /// - Never touch keys we don't own; unknown structure in `hooks` is preserved.
-/// - Our entries are identified by the hook command containing "vibenotch-hook".
+/// - Our entries are identified by the hook command containing "rocky-hook".
 /// - Merge is idempotent (re-running replaces our entries, no duplicates).
 /// - Unparseable input throws — callers must never overwrite a file they
 ///   couldn't parse.
@@ -14,7 +14,9 @@ public enum ClaudeSettingsMerger {
         case notAnObject
     }
 
-    public static let commandMarker = "vibenotch-hook"
+    public static let commandMarker = "rocky-hook"
+    /// Pre-rename marker; still matched so old installs migrate cleanly.
+    public static let legacyMarker = "vibenotch-hook"
 
     /// Hook events we install per agent. PermissionRequest is the approval
     /// channel; PreToolUse is deliberately absent (fires for every call,
@@ -119,7 +121,10 @@ public enum ClaudeSettingsMerger {
 
     private static func isOurs(_ group: [String: Any]) -> Bool {
         guard let hooks = group["hooks"] as? [[String: Any]] else { return false }
-        return hooks.contains { ($0["command"] as? String)?.contains(commandMarker) == true }
+        return hooks.contains { hook in
+            guard let command = hook["command"] as? String else { return false }
+            return command.contains(commandMarker) || command.contains(legacyMarker)
+        }
     }
 
     private static func parse(_ data: Data?) throws -> [String: Any] {

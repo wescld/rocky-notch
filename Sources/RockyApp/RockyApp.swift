@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct VibenotchApp: App {
+struct RockyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
 
     var body: some Scene {

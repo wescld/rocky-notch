@@ -2,31 +2,31 @@
 import PackageDescription
 
 let package = Package(
-    name: "vibenotch",
+    name: "rocky",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Rocky", targets: ["VibenotchApp"]),
-        .executable(name: "vibenotch-hook", targets: ["VibenotchHook"]),
-        .library(name: "VibenotchCore", targets: ["VibenotchCore"]),
+        .executable(name: "Rocky", targets: ["RockyApp"]),
+        .executable(name: "rocky-hook", targets: ["RockyHook"]),
+        .library(name: "RockyCore", targets: ["RockyCore"]),
     ],
     targets: [
         .target(
-            name: "VibenotchCore",
+            name: "RockyCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "VibenotchApp",
-            dependencies: ["VibenotchCore"],
+            name: "RockyApp",
+            dependencies: ["RockyCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "VibenotchHook",
-            dependencies: ["VibenotchCore"],
+            name: "RockyHook",
+            dependencies: ["RockyCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "VibenotchCoreTests",
-            dependencies: ["VibenotchCore"],
+            name: "RockyCoreTests",
+            dependencies: ["RockyCore"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

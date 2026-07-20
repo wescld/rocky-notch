@@ -1,5 +1,5 @@
 import SwiftUI
-import VibenotchCore
+import RockyCore
 
 /// Dark refined HUD fused with the notch, Vibe-Island-calibre: the pixel
 /// charm lives in Rocky (the mascot); everything around him is quiet,

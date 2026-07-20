@@ -1,5 +1,5 @@
 import SwiftUI
-import VibenotchCore
+import RockyCore
 
 /// Rocky's settings window: display mode, sounds, integration status and
 /// app details. English-only, like the rest of the product.
@@ -67,7 +67,7 @@ struct SettingsView: View {
             }
 
             Section("Details") {
-                LabeledContent("Version", value: Vibenotch.version)
+                LabeledContent("Version", value: Rocky.version)
                 LabeledContent("Active sessions", value: "\(hub.sessions.count)")
                 LabeledContent(
                     "Tokens (tracked sessions)",

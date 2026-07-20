@@ -1,5 +1,5 @@
 import XCTest
-@testable import VibenotchCore
+@testable import RockyCore
 
 final class TranscriptTailTests: XCTestCase {
     func chunk(_ lines: String...) -> Data {

@@ -1,5 +1,5 @@
 import Foundation
-import VibenotchCore
+import RockyCore
 
 /// Tails session transcript JSONL files and reports the latest action.
 /// Secondary data source only (spec §3.5): hooks own the state machine;

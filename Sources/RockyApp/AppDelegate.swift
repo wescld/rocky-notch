@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
-import VibenotchCore
+import RockyCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -27,10 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.applyDisplayMode() }
         healStaleHookPathIfNeeded()
+        // One-time migration: drop the pre-rename support directory.
+        try? FileManager.default.removeItem(atPath: IPC.legacyDirectory())
     }
 
     private func applyDisplayMode() {
-        guard ProcessInfo.processInfo.environment["VIBENOTCH_HEADLESS"] == nil else { return }
+        guard ProcessInfo.processInfo.environment["ROCKY_HEADLESS"] == nil else { return }
         switch Preferences.displayMode {
         case .notch:
             if notchController == nil {
@@ -116,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(withTitle: "Rocky \(Vibenotch.version)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Rocky \(Rocky.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
         for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
@@ -168,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 alert.messageText = "Install the \(integration.displayName) integration?"
                 alert.informativeText = """
                 Rocky will add hooks to \(integration.configURL.path) \
-                (a .vibenotch-bak backup is created). New sessions will show \
+                (a .rocky-bak backup is created). New sessions will show \
                 up with permission approval. If Rocky isn't running, nothing \
                 changes in your workflow.
                 """
@@ -212,11 +214,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Integration-test hook: VIBENOTCH_AUTODECIDE=allow|deny|ask makes the
+    /// Integration-test hook: ROCKY_AUTODECIDE=allow|deny|ask makes the
     /// hub answer every permission request without UI. Never set in normal use.
     private func installAutoDecideForTesting() {
         guard
-            let raw = ProcessInfo.processInfo.environment["VIBENOTCH_AUTODECIDE"],
+            let raw = ProcessInfo.processInfo.environment["ROCKY_AUTODECIDE"],
             let decision = Decision(rawValue: raw)
         else { return }
         hub.onPermissionRequest = { [weak self] session in

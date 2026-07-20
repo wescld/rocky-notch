@@ -1,10 +1,10 @@
-// vibenotch-hook: executed by agent CLIs (Claude Code) on hook events.
+// rocky-hook: executed by agent CLIs (Claude Code) on hook events.
 //
 // Contract: NEVER block or fail the calling agent. Any error path exits 0
 // with no output, which Claude Code treats as "no decision" (passthrough).
 // Only an explicit allow/deny decision from the app produces stdout.
 import Foundation
-import VibenotchCore
+import RockyCore
 
 let connectTimeoutMs: Int32 = 50
 // Hard ceiling below the installed hook `timeout: 60`, so we exit cleanly

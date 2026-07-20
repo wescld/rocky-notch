@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
-import VibenotchCore
+import RockyCore
 
 @MainActor
 final class NotchUIState: ObservableObject {

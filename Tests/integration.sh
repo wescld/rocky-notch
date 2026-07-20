@@ -1,5 +1,5 @@
 #!/bin/bash
-# Integration harness: real vibenotch-hook against the real app binary.
+# Integration harness: real rocky-hook against the real app binary.
 # Covers: allow, deny, ask (silent), app down (fail-open latency).
 # Usage: Tests/integration.sh  (builds release first)
 set -u
@@ -12,7 +12,7 @@ check() { # name expected actual
 }
 
 swift build -c release >/dev/null 2>&1 || { echo "build falhou"; exit 1; }
-HOOK=.build/release/vibenotch-hook
+HOOK=.build/release/rocky-hook
 APP=.build/release/Rocky
 
 pkill -x Rocky; pkill -x Vibenotch 2>/dev/null; sleep 0.5
@@ -30,7 +30,7 @@ check "app-down: sem output" "" "$out"
 
 # 2-4. allow / deny / ask com o app decidindo automaticamente.
 for decision in allow deny ask; do
-  VIBENOTCH_AUTODECIDE=$decision VIBENOTCH_HEADLESS=1 $APP >/dev/null 2>&1 &
+  ROCKY_AUTODECIDE=$decision ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 &
   APP_PID=$!
   sleep 1.5
   out=$(echo "$PR_EVENT" | $HOOK); code=$?
@@ -51,7 +51,7 @@ for decision in allow deny ask; do
 done
 
 # 5. Evento fire-and-forget não espera resposta.
-VIBENOTCH_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!
+ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!
 sleep 1.5
 out=$(echo '{"session_id":"it","hook_event_name":"Stop"}' | $HOOK); code=$?
 kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null

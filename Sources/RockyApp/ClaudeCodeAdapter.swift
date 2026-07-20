@@ -1,5 +1,5 @@
 import Foundation
-import VibenotchCore
+import RockyCore
 
 enum IntegrationError: LocalizedError {
     case unparseableSettings(String)
@@ -26,7 +26,7 @@ struct AgentIntegration {
     static var hookBinaryPath: String {
         let executable = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
         return executable.deletingLastPathComponent()
-            .appendingPathComponent("vibenotch-hook").path
+            .appendingPathComponent("rocky-hook").path
     }
 
     static var claudeCode: AgentIntegration {
@@ -106,7 +106,7 @@ struct AgentIntegration {
         )
         if let existing {
             try existing.write(
-                to: configURL.appendingPathExtension("vibenotch-bak"),
+                to: configURL.appendingPathExtension("rocky-bak"),
                 options: .atomic
             )
         }

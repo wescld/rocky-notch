@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 import SwiftUI
-import VibenotchCore
+import RockyCore
 
 /// Menu-bar-mode home: the same session console as the notch, in a floating
 /// black glass card anchored under the status item.
