@@ -28,5 +28,20 @@ app: build
 run: app
 	open $(APP)
 
+# Signed + notarized release. Requires a "Developer ID Application"
+# certificate in the keychain and a notarytool keychain profile:
+#   xcrun notarytool store-credentials rocky-notary \
+#     --apple-id you@example.com --team-id TEAMID --password app-specific-pw
+# Usage: make release SIGN="Developer ID Application: Your Name (TEAMID)"
+release: app
+	codesign --force --deep --options runtime --timestamp \
+		--sign "$(SIGN)" $(APP)
+	ditto -c -k --keepParent $(APP) dist/Rocky.zip
+	xcrun notarytool submit dist/Rocky.zip \
+		--keychain-profile rocky-notary --wait
+	xcrun stapler staple $(APP)
+	ditto -c -k --keepParent $(APP) dist/Rocky.zip
+	@echo "release pronto: dist/Rocky.zip"
+
 clean:
 	rm -rf .build dist
