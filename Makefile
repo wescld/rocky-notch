@@ -23,6 +23,9 @@ app: build
 	cp Support/Art/rocky-idle/*.png $(APP)/Contents/Resources/Art/
 	cp Support/Art/rocky-dance/*.png $(APP)/Contents/Resources/Art/
 	cp Support/Art/rocky-walk/*.png $(APP)/Contents/Resources/Art/
+	cp Support/Art/rocky-eat/*.png $(APP)/Contents/Resources/Art/
+	if ls Support/Art/rocky-think/*.png >/dev/null 2>&1; then cp Support/Art/rocky-think/*.png $(APP)/Contents/Resources/Art/; fi
+	if ls Support/Art/rocky-react/*.png >/dev/null 2>&1; then cp Support/Art/rocky-react/*.png $(APP)/Contents/Resources/Art/; fi
 	cp Support/Fonts/PressStart2P-Regular.ttf Support/Fonts/OFL.txt $(APP)/Contents/Resources/Fonts/
 	if [ -f Support/AppIcon.icns ]; then cp Support/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns; fi
 	codesign --force --deep --sign - $(APP)

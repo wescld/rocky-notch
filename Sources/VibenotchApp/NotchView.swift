@@ -32,7 +32,7 @@ struct NotchView: View {
         let card = hasPending ? cardHeight + CGFloat(pendingDiffLines) * 21 : 26
         let rows = sessionCount == 0
             ? rowHeight + 84
-            : CGFloat(sessionCount) * rowHeight + card + 20 + 26
+            : CGFloat(sessionCount) * rowHeight + card + 20 + 40
         let height = notchHeight + rows + 18
         return CGSize(
             width: max(expandedWidth, notchWidth + wingWidth * 2),
@@ -273,10 +273,11 @@ struct SessionListView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
-                // Working agents = Rocky snacking on tokens; quiet = patrol.
+                // Working agents = Rocky thinking/snacking; quiet = patrol.
                 BottomRocky(anyRunning: hub.sessions.contains { $0.status == .running })
-                    .padding(.horizontal, 8)
-                    .padding(.top, 2)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
             }
             Color.clear.frame(height: 8)
         }
@@ -344,43 +345,83 @@ extension View {
     }
 }
 
-/// The bottom-strip Rocky: patrols when idle, snacks on a token crystal
-/// while agents work, and sprints back and forth for a bit when poked.
+/// The bottom-strip Rocky: patrols when idle; while agents work he
+/// alternates between thinking and snacking on a token crystal. Poking him
+/// startles him (one-shot reaction) into a sprint before settling down.
 struct BottomRocky: View {
     let anyRunning: Bool
+    @State private var reactUntil: Date?
     @State private var runBurstUntil: Date?
 
-    private var bursting: Bool {
-        if let until = runBurstUntil { return until > Date() }
-        return false
-    }
+    private static let reactDuration = 0.7
+    private static let sprintDuration = 2.8
 
     var body: some View {
-        Group {
-            if bursting {
-                WalkingRocky(size: 24, speed: 110, fps: 14)
-            } else if anyRunning {
-                HStack {
-                    Spacer()
-                    RockyAnimatedSprite(prefix: "eat", fallback: "south", fps: 8, size: 24)
-                        .onTapGesture { burst() }
-                    Spacer()
+        TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
+            let now = timeline.date
+            Group {
+                if let until = reactUntil, until > now {
+                    HStack {
+                        Spacer()
+                        RockyOneShot(prefix: "react", fallback: "rocky-alert", duration: Self.reactDuration, size: 26)
+                        Spacer()
+                    }
+                } else if let until = runBurstUntil, until > now {
+                    WalkingRocky(size: 24, speed: 110, fps: 14)
+                } else if anyRunning {
+                    // Alternate moods every 9s: think, then snack.
+                    let thinking = Int(now.timeIntervalSinceReferenceDate / 9) % 2 == 0
+                    HStack {
+                        Spacer()
+                        RockyAnimatedSprite(
+                            prefix: thinking ? "think" : "eat",
+                            fallback: "south",
+                            fps: thinking ? 6 : 8,
+                            size: 24
+                        )
+                        .onTapGesture { startle() }
+                        Spacer()
+                    }
+                } else {
+                    WalkingRocky()
                 }
-            } else {
-                WalkingRocky()
             }
         }
-        .frame(height: 24)
+        .frame(height: 26)
     }
 
-    private func burst() {
+    private func startle() {
         RockyVoice.shared.poke()
-        runBurstUntil = Date().addingTimeInterval(2.8)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.85) {
-            if let until = runBurstUntil, until <= Date() {
-                runBurstUntil = nil
+        let now = Date()
+        reactUntil = now.addingTimeInterval(Self.reactDuration)
+        runBurstUntil = now.addingTimeInterval(Self.reactDuration + Self.sprintDuration)
+    }
+}
+
+/// Plays an animation once (no loop), then holds the last frame.
+struct RockyOneShot: View {
+    let prefix: String
+    let fallback: String
+    let duration: Double
+    let size: CGFloat
+    @State private var start = Date()
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 16.0)) { timeline in
+            let frames = RockyAnimatedSprite.loadFrames(prefix: prefix)
+            if frames.isEmpty {
+                RockySprite(state: fallback, fallback: "south", size: size)
+            } else {
+                let progress = min(1, timeline.date.timeIntervalSince(start) / duration)
+                let index = min(frames.count - 1, Int(progress * Double(frames.count)))
+                Image(nsImage: frames[index])
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size, height: size)
             }
         }
+        .onAppear { start = Date() }
     }
 }
 
@@ -792,6 +833,10 @@ struct RockyAnimatedSprite: View {
     let size: CGFloat
 
     private static var cache: [String: [NSImage]] = [:]
+
+    static func loadFrames(prefix: String) -> [NSImage] {
+        frames(prefix: prefix)
+    }
 
     private static func frames(prefix: String) -> [NSImage] {
         if let cached = cache[prefix] { return cached }
