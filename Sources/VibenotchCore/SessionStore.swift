@@ -34,6 +34,9 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// PID of the GUI app (terminal/editor) hosting this session, resolved
     /// from the hook's process ancestry while the hook is still alive.
     public var terminalAppPid: Int32?
+    public var transcriptPath: String?
+    /// Last meaningful action from the transcript ("Bash: npm test").
+    public var lastAction: String?
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
@@ -65,7 +68,8 @@ public struct SessionStore: Equatable, Sendable {
         case .sessionEnd:
             sessions[event.sessionId] = nil
             return
-        case .sessionStart, .stop, .notification, .permissionRequest, .unknown:
+        case .sessionStart, .stop, .notification, .permissionRequest,
+             .userPromptSubmit, .unknown:
             break
         }
 
@@ -79,17 +83,22 @@ public struct SessionStore: Equatable, Sendable {
             lastEventAt: date,
             title: nil,
             model: nil,
-            terminalAppPid: nil
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
         )
         session.lastEventAt = date
         session.hookPid = envelope.hookPid
         if let cwd = event.cwd { session.cwd = cwd }
+        if let path = event.transcriptPath { session.transcriptPath = path }
 
         switch event.kind {
         case .sessionStart:
             session.status = .running
             session.title = event.sessionTitle ?? session.title
             session.model = event.model ?? session.model
+        case .userPromptSubmit:
+            session.status = .running
         case .permissionRequest:
             session.status = .waitingPermission
             session.pending = PendingPermission(
@@ -119,6 +128,10 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func setTerminalApp(pid: Int32, sessionId: String) {
         sessions[sessionId]?.terminalAppPid = pid
+    }
+
+    public mutating func setLastAction(_ action: String, sessionId: String) {
+        sessions[sessionId]?.lastAction = action
     }
 
     /// Called when a pending request was answered or timed out.

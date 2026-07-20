@@ -18,6 +18,7 @@ final class AgentHub: ObservableObject {
     var onSessionIdle: ((AgentSession) -> Void)?
 
     private let server: IPCServer
+    private let transcripts = TranscriptWatcher()
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
     private var pruneTimer: Timer?
 
@@ -30,6 +31,9 @@ final class AgentHub: ObservableObject {
         }
         server.onPendingDropped = { [weak self] requestId in
             self?.finishPending(requestId: requestId)
+        }
+        transcripts.onAction = { [weak self] sessionId, action in
+            self?.store.setLastAction(action, sessionId: sessionId)
         }
     }
 
@@ -51,6 +55,7 @@ final class AgentHub: ObservableObject {
 
     func stop() {
         server.stop()
+        transcripts.stopAll()
         pruneTimer?.invalidate()
         for task in timeoutTasks.values { task.cancel() }
         timeoutTasks.removeAll()
@@ -66,9 +71,21 @@ final class AgentHub: ObservableObject {
     var resolveTerminalApp: (Int32) -> Int32? = { TerminalFocus.guiAncestor(of: $0) }
 
     private func handle(_ envelope: HookEnvelope) {
+        let knownBefore = Set(store.sessions.keys)
         store.apply(envelope, at: Date())
         if let guiPid = resolveTerminalApp(envelope.hookPid) {
             store.setTerminalApp(pid: guiPid, sessionId: envelope.event.sessionId)
+        }
+
+        // Transcript enrichment follows the session's lifetime. Codex marks
+        // its transcript_path as unstable for hooks; only tail Claude's.
+        let sessionId = envelope.event.sessionId
+        if envelope.agent == "claude-code",
+           let path = store.sessions[sessionId]?.transcriptPath {
+            transcripts.watch(sessionId: sessionId, path: path)
+        }
+        if knownBefore.contains(sessionId), store.sessions[sessionId] == nil {
+            transcripts.unwatch(sessionId: sessionId)
         }
 
         switch envelope.event.kind {

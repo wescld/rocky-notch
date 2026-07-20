@@ -139,9 +139,25 @@ struct SessionRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                Text(statusText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if session.agent != "claude-code" {
+                    Text(session.agent)
+                        .font(.system(size: 9, weight: .medium))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.white.opacity(0.12)))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                if session.status == .running, let action = session.lastAction {
+                    Text(action)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text(statusText)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button {
                     TerminalFocus.focus(session: session)

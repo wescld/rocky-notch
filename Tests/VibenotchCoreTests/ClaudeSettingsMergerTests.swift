@@ -72,6 +72,23 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         XCTAssertFalse(ClaudeSettingsMerger.isInstalled(settings: cleaned))
     }
 
+    func testCodexEventsAndAgentArgument() throws {
+        let out = try ClaudeSettingsMerger.merge(
+            settings: nil,
+            hookBinaryPath: binary,
+            events: ClaudeSettingsMerger.codexEvents,
+            commandArguments: "--agent codex"
+        )
+        let hooks = try XCTUnwrap(try parse(out)["hooks"] as? [String: Any])
+        XCTAssertNil(hooks["SessionEnd"])
+        XCTAssertNil(hooks["Notification"])
+        XCTAssertNotNil(hooks["UserPromptSubmit"])
+        let pr = try XCTUnwrap((hooks["PermissionRequest"] as? [[String: Any]])?.first)
+        let hook = try XCTUnwrap((pr["hooks"] as? [[String: Any]])?.first)
+        XCTAssertEqual(hook["command"] as? String, "\(binary) --agent codex")
+        XCTAssertTrue(ClaudeSettingsMerger.isInstalled(settings: out))
+    }
+
     func testInvalidJSONThrows() {
         XCTAssertThrowsError(
             try ClaudeSettingsMerger.merge(

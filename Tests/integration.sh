@@ -35,7 +35,8 @@ for decision in allow deny ask; do
   sleep 1.5
   out=$(echo "$PR_EVENT" | $HOOK); code=$?
   kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null
-  sleep 0.3
+  # O próximo app precisa ver o socket morto para fazer bind (anti-flake).
+  sleep 1
   check "$decision: exit 0" "0" "$code"
   case $decision in
     allow|deny)

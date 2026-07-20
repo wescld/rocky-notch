@@ -1,7 +1,9 @@
 import Foundation
 
-/// Pure merge/unmerge of vibenotch hook entries into Claude Code's
-/// `~/.claude/settings.json`. Rules:
+/// Pure merge/unmerge of vibenotch hook entries into an agent CLI's hooks
+/// config. The same JSON structure is shared by Claude Code
+/// (`~/.claude/settings.json`, hooks as one key among many) and Codex
+/// (`~/.codex/hooks.json`, hooks as the only key). Rules:
 /// - Never touch keys we don't own; unknown structure in `hooks` is preserved.
 /// - Our entries are identified by the hook command containing "vibenotch-hook".
 /// - Merge is idempotent (re-running replaces our entries, no duplicates).
@@ -14,10 +16,11 @@ public enum ClaudeSettingsMerger {
 
     public static let commandMarker = "vibenotch-hook"
 
-    /// Hook events we install. PermissionRequest is the approval channel;
-    /// PreToolUse is deliberately absent (fires for every call, would stall
-    /// auto-approved tools).
-    static let events: [(name: String, needsReply: Bool)] = [
+    /// Hook events we install per agent. PermissionRequest is the approval
+    /// channel; PreToolUse is deliberately absent (fires for every call,
+    /// would stall auto-approved tools). Codex has no SessionEnd or
+    /// Notification — orphan pruning covers session cleanup there.
+    public static let claudeEvents: [(name: String, needsReply: Bool)] = [
         ("SessionStart", false),
         ("SessionEnd", false),
         ("Stop", false),
@@ -25,9 +28,18 @@ public enum ClaudeSettingsMerger {
         ("PermissionRequest", true),
     ]
 
+    public static let codexEvents: [(name: String, needsReply: Bool)] = [
+        ("SessionStart", false),
+        ("UserPromptSubmit", false),
+        ("Stop", false),
+        ("PermissionRequest", true),
+    ]
+
     public static func merge(
         settings data: Data?,
         hookBinaryPath: String,
+        events: [(name: String, needsReply: Bool)] = claudeEvents,
+        commandArguments: String = "",
         permissionTimeout: Int = 60
     ) throws -> Data {
         var root = try parse(data)
@@ -37,9 +49,13 @@ public enum ClaudeSettingsMerger {
             var groups = (hooks[event] as? [[String: Any]]) ?? []
             groups.removeAll(where: isOurs)
 
+            var command = shellQuote(hookBinaryPath)
+            if !commandArguments.isEmpty {
+                command += " " + commandArguments
+            }
             var hook: [String: Any] = [
                 "type": "command",
-                "command": shellQuote(hookBinaryPath),
+                "command": command,
             ]
             if needsReply {
                 hook["timeout"] = permissionTimeout

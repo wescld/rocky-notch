@@ -5,7 +5,7 @@ import VibenotchCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var notchController: NotchWindowController?
-    private let adapter = ClaudeCodeAdapter()
+    private let integrations: [AgentIntegration] = [.claudeCode, .codex]
     let hub = AgentHub()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -43,23 +43,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "vibenotch \(Vibenotch.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
-        if adapter.isInstalled {
-            menu.addItem(withTitle: "Claude Code: integração instalada ✓", action: nil, keyEquivalent: "")
-            let remove = NSMenuItem(
-                title: "Remover integração do Claude Code",
-                action: #selector(uninstallIntegration),
-                keyEquivalent: ""
-            )
-            remove.target = self
-            menu.addItem(remove)
-        } else {
-            let install = NSMenuItem(
-                title: "Instalar integração com Claude Code…",
-                action: #selector(installIntegration),
-                keyEquivalent: ""
-            )
-            install.target = self
-            menu.addItem(install)
+        for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
+            let item: NSMenuItem
+            if integration.isInstalled {
+                item = NSMenuItem(
+                    title: "Remover integração do \(integration.displayName) ✓",
+                    action: #selector(toggleIntegration(_:)),
+                    keyEquivalent: ""
+                )
+            } else {
+                item = NSMenuItem(
+                    title: "Instalar integração com \(integration.displayName)…",
+                    action: #selector(toggleIntegration(_:)),
+                    keyEquivalent: ""
+                )
+            }
+            item.tag = index
+            item.target = self
+            menu.addItem(item)
         }
         menu.addItem(.separator())
         menu.addItem(
@@ -69,29 +70,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         )
     }
 
-    @objc private func installIntegration() {
-        let alert = NSAlert()
-        alert.messageText = "Instalar integração com o Claude Code?"
-        alert.informativeText = """
-        O vibenotch vai adicionar hooks ao ~/.claude/settings.json \
-        (um backup .vibenotch-bak é criado). Sessões novas do Claude Code \
-        passam a aparecer no notch, com aprovação de permissões. \
-        Se o vibenotch não estiver rodando, nada muda no seu fluxo.
-        """
-        alert.addButton(withTitle: "Instalar")
-        alert.addButton(withTitle: "Cancelar")
-        NSApp.activate()
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    @objc private func toggleIntegration(_ sender: NSMenuItem) {
+        guard integrations.indices.contains(sender.tag) else { return }
+        let integration = integrations[sender.tag]
         do {
-            try adapter.install()
-        } catch {
-            presentError(error)
-        }
-    }
-
-    @objc private func uninstallIntegration() {
-        do {
-            try adapter.uninstall()
+            if integration.isInstalled {
+                try integration.uninstall()
+            } else {
+                let alert = NSAlert()
+                alert.messageText = "Instalar integração com o \(integration.displayName)?"
+                alert.informativeText = """
+                O vibenotch vai adicionar hooks a \(integration.configURL.path) \
+                (um backup .vibenotch-bak é criado). Sessões novas passam a \
+                aparecer no notch, com aprovação de permissões. Se o vibenotch \
+                não estiver rodando, nada muda no seu fluxo.
+                """
+                alert.addButton(withTitle: "Instalar")
+                alert.addButton(withTitle: "Cancelar")
+                NSApp.activate()
+                guard alert.runModal() == .alertFirstButtonReturn else { return }
+                try integration.install()
+            }
         } catch {
             presentError(error)
         }
@@ -107,8 +106,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// If the app bundle moved since install, re-point the hooks silently.
     private func healStaleHookPathIfNeeded() {
-        guard adapter.needsReinstall else { return }
-        try? adapter.install()
+        for integration in integrations where integration.needsReinstall {
+            try? integration.install()
+        }
     }
 
     // MARK: - Alerts

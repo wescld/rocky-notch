@@ -10,6 +10,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case stop
         case notification
         case permissionRequest
+        case userPromptSubmit
         case unknown(String)
 
         public init(name: String) {
@@ -19,6 +20,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "Stop": self = .stop
             case "Notification": self = .notification
             case "PermissionRequest": self = .permissionRequest
+            case "UserPromptSubmit": self = .userPromptSubmit
             default: self = .unknown(name)
             }
         }
