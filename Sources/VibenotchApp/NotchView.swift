@@ -112,6 +112,7 @@ struct NotchView: View {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 20)
                 }
             }
+            .pokeable()
             .animation(.spring(duration: 0.3, bounce: 0.5), value: hub.celebrating)
             .padding(.leading, 18)
             .padding(.bottom, 1)
@@ -255,6 +256,7 @@ struct SessionListView: View {
             if hub.sessions.isEmpty {
                 VStack(spacing: 10) {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 64)
+                        .pokeable()
                     Text("Rocky on watch. Run claude or codex in a terminal.")
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.inkTertiary)
@@ -279,6 +281,41 @@ struct SessionListView: View {
             }
             Color.clear.frame(height: 8)
         }
+    }
+}
+
+/// Physical press: shrinks while the mouse is down, springs back on release.
+struct PressableStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.90 : 1)
+            .animation(.spring(duration: 0.15, bounce: 0.4), value: configuration.isPressed)
+    }
+}
+
+/// Makes any Rocky sprite poke-able: click → happy hop + trill.
+private struct PokeableModifier: ViewModifier {
+    @State private var poked = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(poked ? 1.3 : 1)
+            .rotationEffect(.degrees(poked ? -8 : 0))
+            .animation(.spring(duration: 0.25, bounce: 0.65), value: poked)
+            .onTapGesture {
+                guard !poked else { return }
+                poked = true
+                RockyVoice.shared.poke()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                    poked = false
+                }
+            }
+    }
+}
+
+extension View {
+    func pokeable() -> some View {
+        modifier(PokeableModifier())
     }
 }
 
@@ -318,6 +355,7 @@ struct WalkingRocky: View {
                     }
                 }
                 .scaleEffect(x: goingRight ? 1 : -1, y: 1)
+                .pokeable()
                 .offset(x: x)
             }
         }
@@ -439,7 +477,10 @@ struct SessionRow: View {
                 .fill(Color.white.opacity(hovering ? 0.06 : 0))
         )
         .contentShape(Rectangle())
-        .onTapGesture { TerminalFocus.focus(session: session) }
+        .onTapGesture {
+            RockyVoice.shared.tap()
+            TerminalFocus.focus(session: session)
+        }
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
@@ -459,6 +500,7 @@ struct PendingSessionCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
                     RockySprite(state: "rocky-alert", fallback: "south", size: 30)
+                        .pokeable()
                     VStack(alignment: .leading, spacing: 2) {
                         Text(session.projectName)
                             .font(.system(size: 13, weight: .semibold))
@@ -492,12 +534,15 @@ struct PendingSessionCard: View {
                 }
                 HStack(spacing: 7) {
                     ActionButton(title: "Approve", style: .fill(Palette.green)) {
+                        RockyVoice.shared.approve()
                         hub.decide(requestId: pending.requestId, decision: .allow)
                     }
                     ActionButton(title: "Deny", style: .tint(Palette.red)) {
+                        RockyVoice.shared.deny()
                         hub.decide(requestId: pending.requestId, decision: .deny)
                     }
                     ActionButton(title: "In terminal", style: .neutral) {
+                        RockyVoice.shared.tap()
                         hub.decide(requestId: pending.requestId, decision: .ask)
                     }
                     Spacer()
@@ -600,7 +645,7 @@ struct ActionButton: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 .scaleEffect(hovering ? 1.04 : 1)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressableStyle())
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }

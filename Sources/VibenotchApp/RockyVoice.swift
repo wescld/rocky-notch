@@ -66,6 +66,35 @@ final class RockyVoice {
         ])
     }
 
+    // MARK: - UI feedback (always synthesized: instant, tiny)
+
+    /// Neutral tick for small interactions.
+    func tap() {
+        play(phrase: [(notes: [880.0], duration: 0.06)])
+    }
+
+    /// Happy rising chirp when the user approves.
+    func approve() {
+        play(phrase: [
+            (notes: [659.26, 783.99], duration: 0.08),
+            (notes: [987.77], duration: 0.12),
+        ])
+    }
+
+    /// Low, short and final when the user denies.
+    func deny() {
+        play(phrase: [(notes: [220.0, 174.61], duration: 0.16)])
+    }
+
+    /// Playful trill when someone pokes Rocky.
+    func poke() {
+        play(phrase: [
+            (notes: [783.99], duration: 0.06),
+            (notes: [987.77], duration: 0.06),
+            (notes: [1174.66], duration: 0.10),
+        ])
+    }
+
     private func playFile(_ name: String) -> Bool {
         guard Preferences.soundsEnabled else { return true }
         guard let filePlayer = filePlayers[name] else { return false }
