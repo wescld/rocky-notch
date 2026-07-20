@@ -96,7 +96,6 @@ struct NotchView: View {
                     fallback: "south",
                     size: 20
                 )
-                .breathing(period: hasPending ? 0.8 : 3.5)
                 if anyRunning {
                     EqualizerBars(tint: Palette.green)
                         .frame(width: 14, height: 10)
@@ -135,7 +134,6 @@ struct NotchView: View {
             if hub.sessions.isEmpty {
                 VStack(spacing: 8) {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 76)
-                        .breathing(period: 3.5)
                     PixelText("zzz... rocky de plantao", size: 7, color: Palette.inkTertiary)
                 }
                 .frame(maxWidth: .infinity, minHeight: Self.rowHeight + 44)
@@ -338,7 +336,6 @@ struct SessionRow: View {
                     fallback: "south",
                     size: 30
                 )
-                .breathing(period: session.pending != nil ? 0.8 : 4)
 
                 PixelText(session.projectName, size: 8, color: Palette.ink)
                     .lineLimit(1)
@@ -423,7 +420,6 @@ struct PermissionCard: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
                 RockySprite(state: "rocky-alert", fallback: "south", size: 34)
-                    .breathing(period: 1.0)
                 PixelText(pending.toolName, size: 8, color: Palette.amber)
                 Spacer()
                 TimeoutBar(since: pending.receivedAt, total: 55)
