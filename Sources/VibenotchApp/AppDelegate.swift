@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(withTitle: "Rocky — vibenotch \(Vibenotch.version)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Rocky \(Vibenotch.version)", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
 
         for (index, integration) in integrations.enumerated() where integration.isAgentPresent {
