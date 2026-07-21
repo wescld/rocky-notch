@@ -86,12 +86,12 @@ final class IPCServer {
     }
 
     /// Sends the decision to the waiting hook (if still connected).
-    func reply(_ decision: Decision, to requestId: String) {
+    func reply(_ decision: Decision, to requestId: String, updatedInput: JSONValue? = nil) {
         queue.async {
             guard let connection = self.pendingConnections.removeValue(forKey: requestId) else {
                 return
             }
-            let message = DecisionMessage(requestId: requestId, decision: decision)
+            let message = DecisionMessage(requestId: requestId, decision: decision, updatedInput: updatedInput)
             if let line = try? NDJSON.encodeLine(message) {
                 connection.write(line)
             }

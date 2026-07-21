@@ -69,8 +69,8 @@ final class AgentHub: ObservableObject {
     }
 
     /// User action from the notch card (or timeout → .passthrough).
-    func decide(requestId: String, decision: Decision) {
-        server.reply(decision, to: requestId)
+    func decide(requestId: String, decision: Decision, updatedInput: JSONValue? = nil) {
+        server.reply(decision, to: requestId, updatedInput: updatedInput)
         finishPending(
             requestId: requestId,
             fellBackToTerminal: decision == .ask || decision == .passthrough

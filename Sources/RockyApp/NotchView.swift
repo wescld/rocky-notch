@@ -22,14 +22,17 @@ struct NotchView: View {
         hasPending: Bool,
         notchWidth: CGFloat,
         notchHeight: CGFloat,
-        pendingDiffLines: Int = 0
+        pendingDiffLines: Int = 0,
+        pendingOptionRows: Int = 0
     ) -> CGSize {
         if !expanded {
             // Slightly taller than the physical notch so the glass rim on the
             // bottom edge is fully visible below the hardware cutout.
             return CGSize(width: notchWidth + wingWidth * 2, height: notchHeight + 5)
         }
-        let card = hasPending ? cardHeight + CGFloat(pendingDiffLines) * 21 : 26
+        let card = hasPending
+            ? cardHeight + CGFloat(pendingDiffLines) * 21 + CGFloat(pendingOptionRows) * 32
+            : 26
         let rows = sessionCount == 0
             ? rowHeight + 84
             : CGFloat(sessionCount) * rowHeight + card + 20 + 40
@@ -643,6 +646,7 @@ struct PendingSessionCard: View {
 
     var body: some View {
         guard let pending = session.pending else { return AnyView(EmptyView()) }
+        let ask = AskUserQuestionRequest.from(toolName: pending.toolName, input: pending.toolInput)
         return AnyView(
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
@@ -659,7 +663,7 @@ struct PendingSessionCard: View {
                                 .foregroundStyle(Palette.inkSecondary)
                                 .lineLimit(1)
                         }
-                        Text("Rocky asks: \(pending.toolName)?")
+                        Text(ask != nil ? "Rocky asks" : "Rocky asks: \(pending.toolName)?")
                             .font(.system(size: 10.5))
                             .foregroundStyle(Palette.amber)
                     }
@@ -669,7 +673,10 @@ struct PendingSessionCard: View {
                         Chip(text: terminal)
                     }
                 }
-                if let diff = EditDiff.from(toolName: pending.toolName, input: pending.toolInput) {
+                if let ask {
+                    QuestionPicker(request: ask, pending: pending, hub: hub)
+                        .id(pending.requestId)
+                } else if let diff = EditDiff.from(toolName: pending.toolName, input: pending.toolInput) {
                     DiffPreview(diff: diff)
                 } else {
                     Text(pending.summary)
@@ -686,13 +693,15 @@ struct PendingSessionCard: View {
                         )
                 }
                 HStack(spacing: 7) {
-                    ActionButton(title: "Approve", style: .fill(Palette.green)) {
-                        RockyVoice.shared.approve()
-                        hub.decide(requestId: pending.requestId, decision: .allow)
-                    }
-                    ActionButton(title: "Deny", style: .tint(Palette.red)) {
-                        RockyVoice.shared.deny()
-                        hub.decide(requestId: pending.requestId, decision: .deny)
+                    if ask == nil {
+                        ActionButton(title: "Approve", style: .fill(Palette.green)) {
+                            RockyVoice.shared.approve()
+                            hub.decide(requestId: pending.requestId, decision: .allow)
+                        }
+                        ActionButton(title: "Deny", style: .tint(Palette.red)) {
+                            RockyVoice.shared.deny()
+                            hub.decide(requestId: pending.requestId, decision: .deny)
+                        }
                     }
                     ActionButton(title: "In terminal", style: .neutral) {
                         RockyVoice.shared.tap()
@@ -713,6 +722,142 @@ struct PendingSessionCard: View {
             )
             .padding(.vertical, 3)
         )
+    }
+}
+
+/// AskUserQuestion rendered as tappable option rows: the user answers from
+/// the notch and the terminal picker never appears. Multi-question inputs
+/// advance one question at a time; multi-select collects then submits.
+struct QuestionPicker: View {
+    let request: AskUserQuestionRequest
+    let pending: PendingPermission
+    @ObservedObject var hub: AgentHub
+
+    @State private var index = 0
+    @State private var answers: [String: [String]] = [:]
+    @State private var selected: Set<String> = []
+
+    private var question: AskUserQuestionRequest.Question {
+        request.questions[min(index, request.questions.count - 1)]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(question.text)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                if request.questions.count > 1 {
+                    Text("\(index + 1)/\(request.questions.count)")
+                        .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Palette.inkTertiary)
+                }
+            }
+            ForEach(Array(question.options.enumerated()), id: \.offset) { position, option in
+                QuestionOptionRow(
+                    number: position + 1,
+                    option: option,
+                    selected: selected.contains(option.label)
+                ) {
+                    choose(option)
+                }
+            }
+            if question.multiSelect {
+                ActionButton(title: "Submit", style: .fill(Palette.green)) {
+                    guard !selected.isEmpty else { return }
+                    advance(with: question.options.map(\.label).filter(selected.contains))
+                }
+                .opacity(selected.isEmpty ? 0.4 : 1)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: index)
+    }
+
+    private func choose(_ option: AskUserQuestionRequest.Option) {
+        if question.multiSelect {
+            RockyVoice.shared.tap()
+            if selected.contains(option.label) {
+                selected.remove(option.label)
+            } else {
+                selected.insert(option.label)
+            }
+        } else {
+            advance(with: [option.label])
+        }
+    }
+
+    private func advance(with labels: [String]) {
+        answers[question.text] = labels
+        selected = []
+        if index + 1 < request.questions.count {
+            RockyVoice.shared.tap()
+            index += 1
+        } else {
+            RockyVoice.shared.approve()
+            hub.decide(
+                requestId: pending.requestId,
+                decision: .allow,
+                updatedInput: AskUserQuestionRequest.updatedInput(
+                    original: pending.toolInput,
+                    answers: answers
+                )
+            )
+        }
+    }
+}
+
+struct QuestionOptionRow: View {
+    let number: Int
+    let option: AskUserQuestionRequest.Option
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text("\(number)")
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(selected ? Color.black : Palette.inkSecondary)
+                    .frame(width: 16, height: 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(selected ? Palette.green : Color.white.opacity(0.10))
+                    )
+                Text(option.label)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                if let description = option.description, !description.isEmpty {
+                    Text(description)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.inkTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.12 : 0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(
+                        selected ? Palette.green.opacity(0.6) : Color.clear,
+                        lineWidth: 1
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle())
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+        }
     }
 }
 

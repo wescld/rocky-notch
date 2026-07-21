@@ -54,10 +54,14 @@ public enum Decision: String, Codable, Sendable {
 public struct DecisionMessage: Codable, Equatable, Sendable {
     public let requestId: String
     public let decision: Decision
+    /// Allow with modified tool input (e.g. AskUserQuestion answered from
+    /// the notch: original input + the selected answers).
+    public let updatedInput: JSONValue?
 
-    public init(requestId: String, decision: Decision) {
+    public init(requestId: String, decision: Decision, updatedInput: JSONValue? = nil) {
         self.requestId = requestId
         self.decision = decision
+        self.updatedInput = updatedInput
     }
 }
 
@@ -79,20 +83,26 @@ public enum NDJSON {
 public enum PermissionRequestOutput {
     /// Returns the JSON to print for allow/deny, or nil when the hook must
     /// exit silently (ask/passthrough → Claude Code shows its own prompt).
-    public static func stdout(for decision: Decision) -> Data? {
+    public static func stdout(for decision: Decision, updatedInput: JSONValue? = nil) -> Data? {
         switch decision {
         case .ask, .passthrough:
             return nil
         case .allow, .deny:
-            let payload: [String: Any] = [
-                "hookSpecificOutput": [
-                    "hookEventName": "PermissionRequest",
-                    "decision": [
-                        "behavior": decision.rawValue
-                    ],
-                ]
+            var decisionObject: [String: JSONValue] = [
+                "behavior": .string(decision.rawValue)
             ]
-            return try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+            if decision == .allow, let updatedInput {
+                decisionObject["updatedInput"] = updatedInput
+            }
+            let payload: JSONValue = .object([
+                "hookSpecificOutput": .object([
+                    "hookEventName": .string("PermissionRequest"),
+                    "decision": .object(decisionObject),
+                ])
+            ])
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            return try? encoder.encode(payload)
         }
     }
 }

@@ -72,7 +72,7 @@ else {
     failOpen("invalid reply")
 }
 debugLog("decision \(reply.decision.rawValue) session=\(event.sessionId)")
-guard let output = PermissionRequestOutput.stdout(for: reply.decision) else {
+guard let output = PermissionRequestOutput.stdout(for: reply.decision, updatedInput: reply.updatedInput) else {
     exit(0)
 }
 

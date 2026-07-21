@@ -147,13 +147,23 @@ final class NotchWindowController {
             .compactMap { EditDiff.from(toolName: $0.toolName, input: $0.toolInput) }
             .map { min($0.lines.count, DiffPreview.maxLines) + 1 }
             .reduce(0, +)
+        // The card height is fixed while the picker steps through questions,
+        // so reserve room for the tallest one (plus its Submit row).
+        let pendingOptionRows = hub.sessions
+            .compactMap(\.pending)
+            .compactMap { AskUserQuestionRequest.from(toolName: $0.toolName, input: $0.toolInput) }
+            .map { request in
+                request.questions.map { $0.options.count + ($0.multiSelect ? 1 : 0) }.max() ?? 0
+            }
+            .reduce(0, +)
         let size = NotchView.size(
             expanded: state.expanded,
             sessionCount: hub.sessions.count,
             hasPending: hub.sessions.contains { $0.pending != nil },
             notchWidth: m.notchWidth,
             notchHeight: m.notchHeight,
-            pendingDiffLines: pendingDiffLines
+            pendingDiffLines: pendingDiffLines,
+            pendingOptionRows: pendingOptionRows
         )
         guard size.width.isFinite, size.height.isFinite,
               size.width > 0, size.height > 0 else { return }
