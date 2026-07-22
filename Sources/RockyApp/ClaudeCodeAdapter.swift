@@ -76,10 +76,10 @@ struct AgentIntegration {
             installNote: """
 
             Grok uses PreToolUse (not PermissionRequest) for blocking hooks. \
-            Rocky auto-passes read-only tools and prompts for shell, edits, \
-            and other write actions. Deny always blocks. Allow lets Grok \
-            continue — pair with Grok's always-approve / bypassPermissions \
-            mode if you want Rocky to be the sole approval gate.
+            Rocky auto-passes read-only tools, and auto-passes everything when \
+            Grok is in always-approve / YOLO (config or session mode). In \
+            normal prompt mode, Rocky asks about shell, edits, and other \
+            writes — Deny blocks; Allow continues.
             """
         )
     }

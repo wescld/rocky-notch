@@ -51,12 +51,19 @@ guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {
 }
 debugLog("event \(event.hookEventName) session=\(event.sessionId) agent=\(agent) tool=\(event.toolName ?? "-") subagent=\(event.agentId ?? "-")")
 
-// Grok PreToolUse fires for every tool. Read-only tools never need a human;
-// exit fail-open immediately so we don't stall the agent or spam the notch.
+// Grok PreToolUse fires for every tool (even in always-approve). Skip the
+// Rocky gate for read-only tools and when Grok is already in YOLO /
+// always-approve — otherwise Rocky becomes a second approval UI the user
+// never asked for. Silent exit is fail-open (allow).
 if agent == "grok",
    event.kind == .permissionRequest,
-   GrokToolPolicy.shouldAutoPass(toolName: event.toolName) {
-    debugLog("auto-pass tool=\(event.toolName ?? "-")")
+   GrokToolPolicy.shouldSkipRockyGate(
+       toolName: event.toolName,
+       permissionMode: event.permissionMode
+   ) {
+    debugLog(
+        "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? "config")"
+    )
     exit(0)
 }
 
