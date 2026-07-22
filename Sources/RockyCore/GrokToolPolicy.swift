@@ -104,7 +104,9 @@ public enum GrokToolPolicy {
                 .trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
             if line.hasPrefix("[") {
-                inUI = line == "[ui]" || line.hasPrefix("[ui.")
+                // Only the top-level [ui] table carries the permission mode;
+                // [ui.*] subtables and every other section are ignored.
+                inUI = line == "[ui]"
                 continue
             }
             guard inUI else { continue }
@@ -127,11 +129,10 @@ public enum GrokToolPolicy {
     // MARK: - Tiny TOML helpers (keys we own; not a full parser)
 
     private static func tomlStringValue(_ line: String, key: String) -> String? {
-        let prefixEq = key + "="
-        let trimmed = line.replacingOccurrences(of: " ", with: "")
-        // Accept `key = "value"` / `key="value"` / `key = value`
-        guard line.hasPrefix(key) || trimmed.hasPrefix(prefixEq) else { return nil }
+        // Match the whole key exactly, so `permission_mode_extra = …` never
+        // gets read as `permission_mode`. Accepts `key = "v"` / `key="v"` / `key = v`.
         guard let eq = line.firstIndex(of: "=") else { return nil }
+        guard line[..<eq].trimmingCharacters(in: .whitespaces) == key else { return nil }
         var value = String(line[line.index(after: eq)...])
             .trimmingCharacters(in: .whitespaces)
         if value.hasPrefix("#") { return nil }

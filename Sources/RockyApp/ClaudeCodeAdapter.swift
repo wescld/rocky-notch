@@ -27,6 +27,11 @@ struct AgentIntegration {
     let commandArguments: String
     /// Extra note shown in the install confirmation dialog.
     let installNote: String
+    /// When true, uninstall deletes the config file if it is left completely
+    /// empty (Grok's dedicated `rocky.json` holds nothing else). Shared configs
+    /// like `~/.claude/settings.json` set this false so uninstall never removes
+    /// a file that still carries the user's own keys.
+    var removesConfigWhenEmpty: Bool = false
 
     /// The hook binary lives next to the app executable inside the bundle.
     static var hookBinaryPath: String {
@@ -80,7 +85,8 @@ struct AgentIntegration {
             Grok is in always-approve / YOLO (config or session mode). In \
             normal prompt mode, Rocky asks about shell, edits, and other \
             writes — Deny blocks; Allow continues.
-            """
+            """,
+            removesConfigWhenEmpty: true
         )
     }
 
@@ -129,9 +135,12 @@ struct AgentIntegration {
         } catch {
             throw IntegrationError.unparseableSettings(configURL.path)
         }
-        // For Grok's dedicated rocky.json, drop the file entirely when empty.
-        if let root = try? JSONSerialization.jsonObject(with: cleaned) as? [String: Any],
-           root.isEmpty || (root["hooks"] == nil && root.count <= 1) {
+        // Grok's dedicated rocky.json holds nothing but our hooks, so drop the
+        // file once it is completely empty. Only ever delete when *nothing*
+        // remains — a shared config keeping foreign keys must survive uninstall.
+        if removesConfigWhenEmpty,
+           let root = try? JSONSerialization.jsonObject(with: cleaned) as? [String: Any],
+           root.isEmpty {
             try? FileManager.default.removeItem(at: configURL)
             return
         }
