@@ -53,10 +53,52 @@ final class AgentHub: ObservableObject {
         } catch {
             serverError = "failed to start IPC: \(error)"
         }
-        pruneTimer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in
+        // Host-process checks need to be snappy (Cursor quit → cards vanish).
+        // Long idle orphan pruning is cheap and shares the same tick.
+        pruneTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
             Task { @MainActor [weak self] in
-                self?.store.pruneOrphans(now: Date())
+                self?.pruneStaleSessions()
             }
+        }
+    }
+
+    /// Drop sessions that can no longer be interacted with:
+    /// 1. idle past `orphanTimeout` (2h)
+    /// 2. host GUI process (terminal/IDE) has exited
+    /// 3. Cursor app fully quit (sessionEnd often never fires on force-quit)
+    private func pruneStaleSessions() {
+        let before = Set(store.sessions.keys)
+        store.pruneOrphans(now: Date())
+
+        var abandoned = store.pruneDeadHosts { pid in
+            TerminalFocus.isProcessAlive(pid)
+        }
+
+        // Cursor force-quit safety net: drop only the sessions whose host PID
+        // was never resolved (guiAncestor missed Cursor's todesktop bundle).
+        // Sessions with a resolved host are already covered by pruneDeadHosts,
+        // and a cursor-agent CLI session in a live terminal must not be killed
+        // just because the Cursor GUI app isn't running.
+        if !Self.isCursorRunning() {
+            abandoned += store.removeSessions(agent: "cursor") { $0.terminalAppPid == nil }
+        }
+
+        for requestId in abandoned {
+            timeoutTasks[requestId]?.cancel()
+            timeoutTasks[requestId] = nil
+        }
+        for sessionId in before.subtracting(Set(store.sessions.keys)) {
+            transcripts.unwatch(sessionId: sessionId)
+        }
+    }
+
+    /// Cursor's bundle id is a todesktop hash and changes across builds; match
+    /// by localized name / bundle id substring.
+    static func isCursorRunning() -> Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            let name = (app.localizedName ?? "").lowercased()
+            let bid = (app.bundleIdentifier ?? "").lowercased()
+            return name == "cursor" || bid.contains("cursor")
         }
     }
 
@@ -79,6 +121,10 @@ final class AgentHub: ObservableObject {
 
     /// Resolves the hook's GUI ancestor; injectable for tests.
     var resolveTerminalApp: (Int32) -> Int32? = { TerminalFocus.guiAncestor(of: $0) }
+    /// Resolves the agent CLI process (codex/claude/grok); injectable for tests.
+    var resolveAgentProcess: (Int32, String) -> Int32? = {
+        TerminalFocus.agentAncestor(of: $0, agent: $1)
+    }
 
     private func handle(_ envelope: HookEnvelope) {
         // Subagent permission requests have no UI (we track top-level
@@ -93,6 +139,9 @@ final class AgentHub: ObservableObject {
         store.apply(envelope, at: Date())
         if let guiPid = resolveTerminalApp(envelope.hookPid) {
             store.setTerminalApp(pid: guiPid, sessionId: envelope.event.sessionId)
+        }
+        if let agentPid = resolveAgentProcess(envelope.hookPid, envelope.agent) {
+            store.setAgentProcess(pid: agentPid, sessionId: envelope.event.sessionId)
         }
 
         // Transcript enrichment follows the session's lifetime. Codex marks
