@@ -129,6 +129,31 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertTrue(abandoned.isEmpty)
     }
 
+    func testRemoveSessionsByAgentHonorsPredicate() {
+        // Cursor-app-quit net only sweeps sessions with no resolved host PID.
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "gui", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        store.apply(
+            HookEnvelope(
+                requestId: "r2", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "cli", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        // "cli" is hosted by a live terminal; "gui" never resolved a host PID.
+        store.setTerminalApp(pid: 4242, sessionId: "cli")
+
+        store.removeSessions(agent: "cursor") { $0.terminalAppPid == nil }
+        XCTAssertNil(store.sessions["gui"])
+        XCTAssertNotNil(store.sessions["cli"])
+    }
+
     func testOrphanPruning() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

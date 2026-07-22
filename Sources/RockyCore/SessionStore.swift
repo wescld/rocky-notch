@@ -222,13 +222,20 @@ public struct SessionStore: Equatable, Sendable {
         return abandoned
     }
 
-    /// Remove every session for a given agent (e.g. Cursor quit with no
-    /// sessionEnd hooks). Returns abandoned pending request ids.
+    /// Remove sessions for a given agent (e.g. Cursor quit with no sessionEnd
+    /// hooks). `where` narrows the sweep — the Cursor-app-quit net only targets
+    /// sessions whose host PID was never resolved, so a `cursor-agent` CLI
+    /// session running in a live terminal is left to the normal dead-host /
+    /// orphan pruning instead of being killed the moment the GUI app is closed.
+    /// Returns abandoned pending request ids.
     @discardableResult
-    public mutating func removeSessions(agent: String) -> [String] {
+    public mutating func removeSessions(
+        agent: String,
+        where predicate: (AgentSession) -> Bool = { _ in true }
+    ) -> [String] {
         var abandoned: [String] = []
         sessions = sessions.filter { _, session in
-            guard session.agent == agent else { return true }
+            guard session.agent == agent, predicate(session) else { return true }
             if let requestId = session.pending?.requestId {
                 abandoned.append(requestId)
             }

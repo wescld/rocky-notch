@@ -74,8 +74,13 @@ final class AgentHub: ObservableObject {
             TerminalFocus.isProcessAlive(pid)
         }
 
+        // Cursor force-quit safety net: drop only the sessions whose host PID
+        // was never resolved (guiAncestor missed Cursor's todesktop bundle).
+        // Sessions with a resolved host are already covered by pruneDeadHosts,
+        // and a cursor-agent CLI session in a live terminal must not be killed
+        // just because the Cursor GUI app isn't running.
         if !Self.isCursorRunning() {
-            abandoned += store.removeSessions(agent: "cursor")
+            abandoned += store.removeSessions(agent: "cursor") { $0.terminalAppPid == nil }
         }
 
         for requestId in abandoned {
