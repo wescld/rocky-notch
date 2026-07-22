@@ -64,13 +64,12 @@ public enum ClaudeSettingsMerger {
             var groups = (hooks[event] as? [[String: Any]]) ?? []
             groups.removeAll(where: isOurs)
 
-            var command = shellQuote(hookBinaryPath)
-            if !commandArguments.isEmpty {
-                command += " " + commandArguments
-            }
             var hook: [String: Any] = [
                 "type": "command",
-                "command": command,
+                "command": hookCommand(
+                    hookBinaryPath: hookBinaryPath,
+                    commandArguments: commandArguments
+                ),
             ]
             if needsReply {
                 hook["timeout"] = permissionTimeout
@@ -102,18 +101,39 @@ public enum ClaudeSettingsMerger {
     /// True when every expected event has our hook pointing at this binary.
     /// False means the installed config predates the current app (missing
     /// event or moved bundle) and should be re-merged.
+    /// The exact command string installed for an integration. Shared with
+    /// `merge` so staleness is judged against what `merge` would write.
+    public static func hookCommand(
+        hookBinaryPath: String,
+        commandArguments: String
+    ) -> String {
+        var command = shellQuote(hookBinaryPath)
+        if !commandArguments.isEmpty {
+            command += " " + commandArguments
+        }
+        return command
+    }
+
+    /// Compares the full command, arguments included, not just the binary
+    /// path: an install predating `--agent claude-code` is stale and must be
+    /// re-merged, otherwise the hook falls back to sniffing GROK_* env vars.
     public static func isCurrent(
         settings data: Data?,
         hookBinaryPath: String,
-        events: [(name: String, needsReply: Bool)]
+        events: [(name: String, needsReply: Bool)],
+        commandArguments: String = ""
     ) -> Bool {
         guard let root = try? parse(data),
               let hooks = root["hooks"] as? [String: Any] else { return false }
+        let expected = hookCommand(
+            hookBinaryPath: hookBinaryPath,
+            commandArguments: commandArguments
+        )
         for (event, _) in events {
             guard let groups = hooks[event] as? [[String: Any]],
                   groups.contains(where: { group in
                       (group["hooks"] as? [[String: Any]])?.contains {
-                          ($0["command"] as? String)?.contains(hookBinaryPath) == true
+                          ($0["command"] as? String) == expected
                       } == true
                   })
             else { return false }

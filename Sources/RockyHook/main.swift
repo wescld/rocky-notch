@@ -32,18 +32,12 @@ func failOpen(_ reason: String) -> Never {
     exit(0)
 }
 
-// Agent identity: Grok injects GROK_* env vars on every hook, including when
-// it runs Claude-compat hooks from ~/.claude/settings.json. Explicit
-// `--agent` always wins (our native installs set it).
-let env = ProcessInfo.processInfo.environment
-var agent = "claude-code"
-if env["GROK_HOOK_EVENT"] != nil || env["GROK_SESSION_ID"] != nil {
-    agent = "grok"
-}
-let args = CommandLine.arguments
-if let flag = args.firstIndex(of: "--agent"), flag + 1 < args.count {
-    agent = args[flag + 1]
-}
+// Agent identity: explicit `--agent` from our installs wins; the GROK_* env
+// sniff only covers Grok running Claude-compat hooks.
+let agent = AgentIdentity.resolve(
+    arguments: CommandLine.arguments,
+    environment: ProcessInfo.processInfo.environment
+)
 
 let input = FileHandle.standardInput.readDataToEndOfFile()
 guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {

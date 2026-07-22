@@ -145,7 +145,41 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         XCTAssertEqual(hook["timeout"] as? Int, 60)
         XCTAssertTrue(ClaudeSettingsMerger.isInstalled(settings: out))
         XCTAssertTrue(ClaudeSettingsMerger.isCurrent(
-            settings: out, hookBinaryPath: binary, events: ClaudeSettingsMerger.grokEvents
+            settings: out, hookBinaryPath: binary, events: ClaudeSettingsMerger.grokEvents,
+            commandArguments: "--agent grok"
         ))
+    }
+
+    /// An install written before `--agent` was passed keeps the right binary
+    /// but the wrong command, so it must read as stale and get re-merged.
+    func testIsCurrentDetectsMissingAgentArgument() throws {
+        let legacy = try ClaudeSettingsMerger.merge(
+            settings: nil,
+            hookBinaryPath: binary,
+            events: ClaudeSettingsMerger.claudeEvents
+        )
+        XCTAssertFalse(ClaudeSettingsMerger.isCurrent(
+            settings: legacy, hookBinaryPath: binary,
+            events: ClaudeSettingsMerger.claudeEvents,
+            commandArguments: "--agent claude-code"
+        ))
+
+        let healed = try ClaudeSettingsMerger.merge(
+            settings: legacy,
+            hookBinaryPath: binary,
+            events: ClaudeSettingsMerger.claudeEvents,
+            commandArguments: "--agent claude-code"
+        )
+        XCTAssertTrue(ClaudeSettingsMerger.isCurrent(
+            settings: healed, hookBinaryPath: binary,
+            events: ClaudeSettingsMerger.claudeEvents,
+            commandArguments: "--agent claude-code"
+        ))
+        // Re-merging must not leave the stale entry behind.
+        let groups = try XCTUnwrap(
+            (try parse(healed)["hooks"] as? [String: Any])?["PermissionRequest"]
+                as? [[String: Any]]
+        )
+        XCTAssertEqual(groups.count, 1)
     }
 }

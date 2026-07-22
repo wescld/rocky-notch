@@ -51,7 +51,10 @@ struct AgentIntegration {
             configURL: config,
             presenceDirectory: config.deletingLastPathComponent(),
             events: ClaudeSettingsMerger.claudeEvents,
-            commandArguments: "",
+            // Explicit, so a Claude session that inherited Grok's GROK_* env
+            // (grok shelling out to `claude`) is not mistaken for Grok and
+            // answered in Grok's reply shape.
+            commandArguments: "--agent claude-code",
             installNote: ""
         )
     }
@@ -107,7 +110,8 @@ struct AgentIntegration {
         return !ClaudeSettingsMerger.isCurrent(
             settings: data,
             hookBinaryPath: Self.hookBinaryPath,
-            events: events
+            events: events,
+            commandArguments: commandArguments
         )
     }
 
