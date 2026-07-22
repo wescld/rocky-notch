@@ -91,6 +91,89 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertTrue(store.sessions.isEmpty)
     }
 
+    func testPruneDeadHostsDropsSessionsWithDeadPid() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "live"), at: t0)
+        store.apply(envelope("SessionStart", session: "dead"), at: t0)
+        store.setTerminalApp(pid: 100, sessionId: "live")
+        store.setTerminalApp(pid: 200, sessionId: "dead")
+
+        let abandoned = store.pruneDeadHosts { pid in pid == 100 }
+        XCTAssertEqual(Set(store.sessions.keys), ["live"])
+        XCTAssertTrue(abandoned.isEmpty)
+    }
+
+    func testPruneDeadHostsDropsWhenAgentProcessDiesButTerminalLives() {
+        // Codex Ctrl+C: agent CLI exits, Warp (terminalAppPid) stays up.
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "codex-1"), at: t0)
+        store.setTerminalApp(pid: 100, sessionId: "codex-1")
+        store.setAgentProcess(pid: 200, sessionId: "codex-1")
+
+        let abandoned = store.pruneDeadHosts { pid in pid == 100 } // only Warp alive
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertTrue(abandoned.isEmpty)
+    }
+
+    func testPruneDeadHostsReturnsPendingRequestIds() {
+        var store = SessionStore()
+        store.apply(
+            envelope("PermissionRequest", session: "s1", requestId: "req-dead", toolName: "Bash"),
+            at: t0
+        )
+        store.setTerminalApp(pid: 9, sessionId: "s1")
+        let abandoned = store.pruneDeadHosts { _ in false }
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertEqual(abandoned, ["req-dead"])
+    }
+
+    func testRemoveSessionsByAgent() {
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "c1", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        store.apply(
+            HookEnvelope(
+                requestId: "r2", hookPid: 1, agent: "claude-code",
+                event: HookEvent(sessionId: "cl", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        let abandoned = store.removeSessions(agent: "cursor")
+        XCTAssertNil(store.sessions["c1"])
+        XCTAssertNotNil(store.sessions["cl"])
+        XCTAssertTrue(abandoned.isEmpty)
+    }
+
+    func testRemoveSessionsByAgentHonorsPredicate() {
+        // Cursor-app-quit net only sweeps sessions with no resolved host PID.
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "gui", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        store.apply(
+            HookEnvelope(
+                requestId: "r2", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "cli", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        // "cli" is hosted by a live terminal; "gui" never resolved a host PID.
+        store.setTerminalApp(pid: 4242, sessionId: "cli")
+
+        store.removeSessions(agent: "cursor") { $0.terminalAppPid == nil }
+        XCTAssertNil(store.sessions["gui"])
+        XCTAssertNotNil(store.sessions["cli"])
+    }
+
     func testOrphanPruning() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

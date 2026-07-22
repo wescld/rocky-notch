@@ -43,6 +43,10 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// PID of the GUI app (terminal/editor) hosting this session, resolved
     /// from the hook's process ancestry while the hook is still alive.
     public var terminalAppPid: Int32?
+    /// PID of the agent CLI process (codex / claude / grok), if resolved.
+    /// Used to drop the card when the user Ctrl+C's the agent while the
+    /// terminal app (e.g. Warp) is still running.
+    public var agentProcessPid: Int32? = nil
     public var transcriptPath: String?
     /// Last meaningful action from the transcript ("Bash: npm test").
     public var lastAction: String?
@@ -155,6 +159,10 @@ public struct SessionStore: Equatable, Sendable {
         sessions[sessionId]?.terminalAppPid = pid
     }
 
+    public mutating func setAgentProcess(pid: Int32, sessionId: String) {
+        sessions[sessionId]?.agentProcessPid = pid
+    }
+
     public mutating func setLastAction(_ action: String, sessionId: String) {
         sessions[sessionId]?.lastAction = action
     }
@@ -187,6 +195,52 @@ public struct SessionStore: Equatable, Sendable {
             session.pending != nil
                 || now.timeIntervalSince(session.lastEventAt) < orphanTimeout
         }
+    }
+
+/// Drop sessions whose host GUI or agent CLI process is gone.
+    /// Returns pending request ids so the hub can cancel decision timeouts.
+    /// Sessions with no resolved PIDs are left alone (orphan timeout still
+    /// applies).
+    @discardableResult
+    public mutating func pruneDeadHosts(isAlive: (Int32) -> Bool) -> [String] {
+        var abandoned: [String] = []
+        sessions = sessions.filter { _, session in
+            var dead = false
+            if let pid = session.agentProcessPid, !isAlive(pid) {
+                dead = true
+            }
+            if let pid = session.terminalAppPid, !isAlive(pid) {
+                dead = true
+            }
+            guard dead else { return true }
+            if let requestId = session.pending?.requestId {
+                abandoned.append(requestId)
+            }
+            return false
+        }
+        return abandoned
+    }
+
+    /// Remove sessions for a given agent (e.g. Cursor quit with no sessionEnd
+    /// hooks). `where` narrows the sweep — the Cursor-app-quit net only targets
+    /// sessions whose host PID was never resolved, so a `cursor-agent` CLI
+    /// session running in a live terminal is left to the normal dead-host /
+    /// orphan pruning instead of being killed the moment the GUI app is closed.
+    /// Returns abandoned pending request ids.
+    @discardableResult
+    public mutating func removeSessions(
+        agent: String,
+        where predicate: (AgentSession) -> Bool = { _ in true }
+    ) -> [String] {
+        var abandoned: [String] = []
+        sessions = sessions.filter { _, session in
+            guard session.agent == agent, predicate(session) else { return true }
+            if let requestId = session.pending?.requestId {
+                abandoned.append(requestId)
+            }
+            return false
+        }
+        return abandoned
     }
 
     /// One-line task chip from a raw UserPromptSubmit prompt.
