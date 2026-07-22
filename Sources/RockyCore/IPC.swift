@@ -87,17 +87,28 @@ public enum PermissionRequestOutput {
     ///
     /// Claude Code and Codex use `hookSpecificOutput` + `behavior`.
     /// Grok's PreToolUse hooks expect `{"decision":"allow|deny"}`.
+    /// Cursor expects `{"permission":"allow|deny|ask"}`.
     public static func stdout(
         for decision: Decision,
         agent: String = "claude-code",
         updatedInput: JSONValue? = nil
     ) -> Data? {
         switch decision {
-        case .ask, .passthrough:
+        case .passthrough:
+            return nil
+        case .ask:
+            // Cursor surfaces its own ask UI when the hook returns "ask".
+            // Claude/Grok treat silent exit as "show terminal prompt".
+            if agent == "cursor" {
+                return cursorStdout(for: .ask)
+            }
             return nil
         case .allow, .deny:
             if agent == "grok" {
                 return grokStdout(for: decision)
+            }
+            if agent == "cursor" {
+                return cursorStdout(for: decision)
             }
             return claudeStdout(for: decision, updatedInput: updatedInput)
         }
@@ -128,6 +139,22 @@ public enum PermissionRequestOutput {
         ]
         if decision == .deny {
             object["reason"] = .string("Denied in Rocky")
+        }
+        return encode(.object(object))
+    }
+
+    private static func cursorStdout(for decision: Decision) -> Data? {
+        var object: [String: JSONValue] = [
+            "permission": .string(decision.rawValue)
+        ]
+        switch decision {
+        case .deny:
+            object["user_message"] = .string("Denied in Rocky")
+            object["agent_message"] = .string("The user denied this action in Rocky.")
+        case .ask:
+            object["user_message"] = .string("Approve in Rocky or Cursor")
+        case .allow, .passthrough:
+            break
         }
         return encode(.object(object))
     }

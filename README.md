@@ -56,7 +56,7 @@ prompt appears. Rocky can never block your work.
 - Token usage and working time per session
 - Rocky speaks in soft musical chimes when something needs you
 - Menu bar mode for notchless displays
-- Claude Code, Codex, and Grok supported today; more agents welcome via PRs
+- Claude Code, Codex, Grok, and Cursor supported today; more agents welcome via PRs
 - 100% local. No server, no telemetry, no account.
 
 ## Install
@@ -86,10 +86,12 @@ conservatively, never touching your other settings):
 | Claude Code | `~/.claude/settings.json` |
 | Codex | `~/.codex/hooks.json` |
 | Grok | `~/.grok/hooks/rocky.json` |
+| Cursor | `~/.cursor/hooks.json` |
 
-Removing the integration removes only Rocky's entries. Grok uses
-`PreToolUse` for blocking (it has no `PermissionRequest`); Rocky auto-passes
-read-only tools and prompts for shell, edits, and other write actions.
+Removing the integration removes only Rocky's entries. Grok and Cursor use
+`PreToolUse`/`preToolUse` for blocking (neither has a `PermissionRequest`);
+Rocky auto-passes read-only tools and prompts for shell, edits, and other
+write actions. Cursor's config is flat (`version` + hook command arrays).
 
 ## Development
 

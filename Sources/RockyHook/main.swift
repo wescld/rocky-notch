@@ -67,6 +67,17 @@ if agent == "grok",
     exit(0)
 }
 
+// Cursor preToolUse fires for every tool. Read-only tools never need a human.
+if agent == "cursor",
+   event.kind == .permissionRequest,
+   CursorToolPolicy.shouldAutoPass(toolName: event.toolName) {
+    debugLog("auto-pass tool=\(event.toolName ?? "-")")
+    if let output = PermissionRequestOutput.stdout(for: .allow, agent: agent) {
+        FileHandle.standardOutput.write(output)
+    }
+    exit(0)
+}
+
 let envelope = HookEnvelope(agent: agent, event: event)
 guard let line = try? NDJSON.encodeLine(envelope) else {
     failOpen("encode")

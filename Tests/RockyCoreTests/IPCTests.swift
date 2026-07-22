@@ -71,4 +71,27 @@ final class IPCTests: XCTestCase {
             "/Users/w/Library/Application Support/rocky/rocky.sock"
         )
     }
+
+    func testCursorPermissionOutputFormat() throws {
+        let allow = try XCTUnwrap(PermissionRequestOutput.stdout(for: .allow, agent: "cursor"))
+        let allowRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: allow) as? [String: Any]
+        )
+        XCTAssertEqual(allowRoot["permission"] as? String, "allow")
+
+        let deny = try XCTUnwrap(PermissionRequestOutput.stdout(for: .deny, agent: "cursor"))
+        let denyRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: deny) as? [String: Any]
+        )
+        XCTAssertEqual(denyRoot["permission"] as? String, "deny")
+        XCTAssertEqual(denyRoot["user_message"] as? String, "Denied in Rocky")
+
+        let ask = try XCTUnwrap(PermissionRequestOutput.stdout(for: .ask, agent: "cursor"))
+        let askRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: ask) as? [String: Any]
+        )
+        XCTAssertEqual(askRoot["permission"] as? String, "ask")
+
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "cursor"))
+    }
 }

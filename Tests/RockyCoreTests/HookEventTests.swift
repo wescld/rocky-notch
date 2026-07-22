@@ -109,4 +109,56 @@ final class HookEventTests: XCTestCase {
         """)
         XCTAssertEqual(event.toolSummary, "/tmp/x.swift")
     }
+
+    func testDecodesCursorConversationIdAndWorkspaceRoots() throws {
+        let event = try decode("""
+        {
+          "conversation_id": "conv-abc",
+          "generation_id": "gen-1",
+          "hook_event_name": "preToolUse",
+          "workspace_roots": ["/Users/w/proj", "/Users/w/other"],
+          "tool_name": "Shell",
+          "tool_input": {"command": "npm test"},
+          "model": "claude-opus-4"
+        }
+        """)
+        XCTAssertEqual(event.kind, .permissionRequest)
+        XCTAssertEqual(event.hookEventName, "PreToolUse")
+        XCTAssertEqual(event.sessionId, "conv-abc")
+        XCTAssertEqual(event.cwd, "/Users/w/proj")
+        XCTAssertEqual(event.toolName, "Shell")
+        XCTAssertEqual(event.toolSummary, "npm test")
+        XCTAssertEqual(event.model, "claude-opus-4")
+    }
+
+    func testDecodesCursorBeforeShellExecution() throws {
+        let event = try decode("""
+        {
+          "conversation_id": "c1",
+          "hook_event_name": "beforeShellExecution",
+          "command": "rm -rf /tmp/x",
+          "cwd": "/Users/w/proj",
+          "sandbox": false
+        }
+        """)
+        XCTAssertEqual(event.kind, .permissionRequest)
+        XCTAssertEqual(event.hookEventName, "BeforeShellExecution")
+        XCTAssertEqual(event.toolName, "Shell")
+        XCTAssertEqual(event.toolSummary, "rm -rf /tmp/x")
+        XCTAssertEqual(event.cwd, "/Users/w/proj")
+    }
+
+    func testDecodesCursorBeforeSubmitPrompt() throws {
+        let event = try decode("""
+        {
+          "conversation_id": "c1",
+          "hook_event_name": "beforeSubmitPrompt",
+          "prompt": "fix the auth bug",
+          "workspace_roots": ["/tmp/p"]
+        }
+        """)
+        XCTAssertEqual(event.kind, .userPromptSubmit)
+        XCTAssertEqual(event.prompt, "fix the auth bug")
+        XCTAssertEqual(event.cwd, "/tmp/p")
+    }
 }
