@@ -258,7 +258,7 @@ struct SessionListView: View {
                 VStack(spacing: 10) {
                     RockySprite(state: "rocky-sleeping", fallback: "south", size: 64)
                         .pokeable()
-                    Text("Rocky on watch. Run claude, codex, or grok in a terminal.")
+                    Text("Rocky on watch. Run claude, codex, grok, or Cursor Agent.")
                         .font(.system(size: 11))
                         .foregroundStyle(Palette.inkTertiary)
                 }
@@ -546,7 +546,13 @@ enum SessionMeta {
     }
 
     static func agentLabel(_ session: AgentSession) -> String {
-        session.agent == "claude-code" ? "Claude" : session.agent.capitalized
+        switch session.agent {
+        case "claude-code": return "Claude"
+        case "codex": return "Codex"
+        case "grok": return "Grok"
+        case "cursor": return "Cursor"
+        default: return session.agent.capitalized
+        }
     }
 
     static func terminalLabel(_ session: AgentSession) -> String? {

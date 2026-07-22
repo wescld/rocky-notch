@@ -17,14 +17,22 @@ enum IntegrationError: LocalizedError {
 /// Safety rules (spec §3.4): backup before writing, atomic write, never
 /// overwrite a file that failed to parse, remove only our own entries.
 struct AgentIntegration {
+    enum ConfigStyle {
+        /// Claude / Codex: nested `[{ "hooks": [{ "command" }] }]`.
+        case nestedGroups
+        /// Cursor: flat `[{ "command" }]` plus top-level `version`.
+        case cursorFlat
+    }
+
     let displayName: String
     let configURL: URL
     /// Directory whose presence means the agent is installed on this machine.
-    /// Usually the config's parent; for Grok the config lives under
-    /// `~/.grok/hooks/` which may not exist until first install.
+    /// Usually the config's parent; Grok/Cursor live under a directory that may
+    /// not exist until first install.
     let presenceDirectory: URL
     let events: [(name: String, needsReply: Bool)]
     let commandArguments: String
+    let configStyle: ConfigStyle
     /// Extra note shown in the install confirmation dialog.
     let installNote: String
     /// When true, uninstall deletes the config file if it is left completely
@@ -55,6 +63,7 @@ struct AgentIntegration {
             // (grok shelling out to `claude`) is not mistaken for Grok and
             // answered in Grok's reply shape.
             commandArguments: "--agent claude-code",
+            configStyle: .nestedGroups,
             installNote: ""
         )
     }
@@ -67,6 +76,7 @@ struct AgentIntegration {
             presenceDirectory: config.deletingLastPathComponent(),
             events: ClaudeSettingsMerger.codexEvents,
             commandArguments: "--agent codex",
+            configStyle: .nestedGroups,
             installNote: ""
         )
     }
@@ -81,6 +91,7 @@ struct AgentIntegration {
             presenceDirectory: home.appendingPathComponent(".grok"),
             events: ClaudeSettingsMerger.grokEvents,
             commandArguments: "--agent grok",
+            configStyle: .nestedGroups,
             installNote: """
 
             Grok uses PreToolUse (not PermissionRequest) for blocking hooks. \
@@ -93,13 +104,39 @@ struct AgentIntegration {
         )
     }
 
+    static var cursor: AgentIntegration {
+        let config = home.appendingPathComponent(".cursor/hooks.json")
+        return AgentIntegration(
+            displayName: "Cursor",
+            configURL: config,
+            presenceDirectory: home.appendingPathComponent(".cursor"),
+            events: CursorSettingsMerger.cursorEvents,
+            commandArguments: "--agent cursor",
+            configStyle: .cursorFlat,
+            installNote: """
+
+            Cursor's official hooks: beforeSubmitPrompt (session + task), \
+            beforeShellExecution / beforeMCPExecution (approval gate), \
+            beforeReadFile / afterFileEdit (observe; no edit block API), \
+            stop (idle). File edits cannot be gated — Cursor has no beforeWrite. \
+            Decisions return {continue, permission, userMessage, agentMessage}.
+            """
+        )
+    }
+
     /// Only offer integrations for CLIs that exist on this machine.
     var isAgentPresent: Bool {
         FileManager.default.fileExists(atPath: presenceDirectory.path)
     }
 
     var isInstalled: Bool {
-        ClaudeSettingsMerger.isInstalled(settings: try? Data(contentsOf: configURL))
+        let data = try? Data(contentsOf: configURL)
+        switch configStyle {
+        case .nestedGroups:
+            return ClaudeSettingsMerger.isInstalled(settings: data)
+        case .cursorFlat:
+            return CursorSettingsMerger.isInstalled(settings: data)
+        }
     }
 
     /// True when installed but stale: moved bundle or missing newly added
@@ -107,24 +144,44 @@ struct AgentIntegration {
     var needsReinstall: Bool {
         guard isInstalled else { return false }
         let data = try? Data(contentsOf: configURL)
-        return !ClaudeSettingsMerger.isCurrent(
-            settings: data,
-            hookBinaryPath: Self.hookBinaryPath,
-            events: events,
-            commandArguments: commandArguments
-        )
+        switch configStyle {
+        case .nestedGroups:
+            return !ClaudeSettingsMerger.isCurrent(
+                settings: data,
+                hookBinaryPath: Self.hookBinaryPath,
+                events: events,
+                commandArguments: commandArguments
+            )
+        case .cursorFlat:
+            return !CursorSettingsMerger.isCurrent(
+                settings: data,
+                hookBinaryPath: Self.hookBinaryPath,
+                events: events,
+                commandArguments: commandArguments
+            )
+        }
     }
 
     func install() throws {
         let existing = try? Data(contentsOf: configURL)
         let merged: Data
         do {
-            merged = try ClaudeSettingsMerger.merge(
-                settings: existing,
-                hookBinaryPath: Self.hookBinaryPath,
-                events: events,
-                commandArguments: commandArguments
-            )
+            switch configStyle {
+            case .nestedGroups:
+                merged = try ClaudeSettingsMerger.merge(
+                    settings: existing,
+                    hookBinaryPath: Self.hookBinaryPath,
+                    events: events,
+                    commandArguments: commandArguments
+                )
+            case .cursorFlat:
+                merged = try CursorSettingsMerger.merge(
+                    settings: existing,
+                    hookBinaryPath: Self.hookBinaryPath,
+                    events: events,
+                    commandArguments: commandArguments
+                )
+            }
         } catch {
             throw IntegrationError.unparseableSettings(configURL.path)
         }
@@ -135,7 +192,12 @@ struct AgentIntegration {
         guard let existing = try? Data(contentsOf: configURL) else { return }
         let cleaned: Data
         do {
-            cleaned = try ClaudeSettingsMerger.unmerge(settings: existing)
+            switch configStyle {
+            case .nestedGroups:
+                cleaned = try ClaudeSettingsMerger.unmerge(settings: existing)
+            case .cursorFlat:
+                cleaned = try CursorSettingsMerger.unmerge(settings: existing)
+            }
         } catch {
             throw IntegrationError.unparseableSettings(configURL.path)
         }

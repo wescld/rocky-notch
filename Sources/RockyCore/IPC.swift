@@ -87,17 +87,29 @@ public enum PermissionRequestOutput {
     ///
     /// Claude Code and Codex use `hookSpecificOutput` + `behavior`.
     /// Grok's PreToolUse hooks expect `{"decision":"allow|deny"}`.
+    /// Cursor expects camelCase:
+    /// `{"continue":bool,"permission":"allow|deny|ask","userMessage":…,"agentMessage":…}`.
     public static func stdout(
         for decision: Decision,
         agent: String = "claude-code",
         updatedInput: JSONValue? = nil
     ) -> Data? {
         switch decision {
-        case .ask, .passthrough:
+        case .passthrough:
+            return nil
+        case .ask:
+            // Cursor surfaces its own ask UI when the hook returns "ask".
+            // Claude/Grok treat silent exit as "show terminal prompt".
+            if agent == "cursor" {
+                return cursorStdout(for: .ask)
+            }
             return nil
         case .allow, .deny:
             if agent == "grok" {
                 return grokStdout(for: decision)
+            }
+            if agent == "cursor" {
+                return cursorStdout(for: decision)
             }
             return claudeStdout(for: decision, updatedInput: updatedInput)
         }
@@ -128,6 +140,24 @@ public enum PermissionRequestOutput {
         ]
         if decision == .deny {
             object["reason"] = .string("Denied in Rocky")
+        }
+        return encode(.object(object))
+    }
+
+    private static func cursorStdout(for decision: Decision) -> Data? {
+        // Cursor docs (GitButler hooks deep dive): camelCase keys + continue.
+        var object: [String: JSONValue] = [
+            "permission": .string(decision.rawValue),
+            "continue": .bool(decision != .deny),
+        ]
+        switch decision {
+        case .deny:
+            object["userMessage"] = .string("Denied in Rocky")
+            object["agentMessage"] = .string("The user denied this action in Rocky.")
+        case .ask:
+            object["userMessage"] = .string("Approve in Rocky or Cursor")
+        case .allow, .passthrough:
+            break
         }
         return encode(.object(object))
     }

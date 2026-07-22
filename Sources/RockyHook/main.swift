@@ -61,6 +61,19 @@ if agent == "grok",
     exit(0)
 }
 
+// Cursor blocking hooks: beforeShellExecution / beforeMCPExecution.
+// beforeReadFile and anything non-shell/MCP: silent exit (fail-open) so we
+// never override Cursor's own allow-list with an explicit {"permission":"allow"}.
+if agent == "cursor",
+   event.kind == .permissionRequest,
+   CursorToolPolicy.shouldAutoPass(
+       toolName: event.toolName,
+       hookEventName: event.hookEventName
+   ) {
+    debugLog("auto-pass tool=\(event.toolName ?? "-") event=\(event.hookEventName)")
+    exit(0)
+}
+
 let envelope = HookEnvelope(agent: agent, event: event)
 guard let line = try? NDJSON.encodeLine(envelope) else {
     failOpen("encode")
