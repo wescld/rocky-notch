@@ -11,6 +11,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case stop
         case notification
         case permissionRequest
+        case postToolUse
         case userPromptSubmit
         case unknown(String)
 
@@ -23,6 +24,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
             // Grok has no PermissionRequest; PreToolUse is the blocking
             // channel and maps to the same approval UI flow.
             case "PermissionRequest", "PreToolUse": self = .permissionRequest
+            // The tool ran, so whatever gate it was waiting on is settled.
+            // This is the only signal we get when the user approves at the
+            // terminal: the agent moves on without telling the pending hook.
+            case "PostToolUse": self = .postToolUse
             case "UserPromptSubmit": self = .userPromptSubmit
             default: self = .unknown(name)
             }
@@ -41,6 +46,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "notification": return "Notification"
             case "permissionrequest": return "PermissionRequest"
             case "pretooluse": return "PreToolUse"
+            case "posttooluse": return "PostToolUse"
             case "userpromptsubmit": return "UserPromptSubmit"
             default: return name
             }

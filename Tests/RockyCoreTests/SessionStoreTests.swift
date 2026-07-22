@@ -27,6 +27,30 @@ final class SessionStoreTests: XCTestCase {
         )
     }
 
+    /// Approving at the terminal never reaches the blocked hook, so PostToolUse
+    /// is the only evidence the gate is settled. Without it the card sat in the
+    /// notch until the 55s decision timeout.
+    func testPostToolUseClearsPendingApprovedAtTerminal() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("PermissionRequest", toolName: "Bash"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingPermission)
+
+        store.apply(envelope("PostToolUse", requestId: "r2", toolName: "Bash"), at: t0 + 2)
+        XCTAssertNil(store.sessions["s1"]?.pending)
+        XCTAssertEqual(store.sessions["s1"]?.status, .running)
+    }
+
+    func testPostToolUseWithoutPendingLeavesStatusAlone() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+
+        store.apply(envelope("PostToolUse", toolName: "Read"), at: t0 + 2)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+    }
+
     func testLifecycle() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

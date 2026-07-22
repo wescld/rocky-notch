@@ -88,7 +88,7 @@ public struct SessionStore: Equatable, Sendable {
             sessions[event.sessionId] = nil
             return
         case .sessionStart, .stop, .notification, .permissionRequest,
-             .userPromptSubmit, .unknown:
+             .postToolUse, .userPromptSubmit, .unknown:
             break
         }
 
@@ -145,6 +145,12 @@ public struct SessionStore: Equatable, Sendable {
             default:
                 break
             }
+        case .postToolUse:
+            // The tool executed, so the approval happened somewhere we cannot
+            // see (the terminal prompt). Drop the card instead of leaving it
+            // up until the decision timeout.
+            session.pending = nil
+            if session.status == .waitingPermission { session.status = .running }
         case .stop:
             session.status = .idle
             session.pending = nil

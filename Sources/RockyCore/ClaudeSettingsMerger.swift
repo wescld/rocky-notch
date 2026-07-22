@@ -28,6 +28,7 @@ public enum ClaudeSettingsMerger {
         ("UserPromptSubmit", false),
         ("Stop", false),
         ("Notification", false),
+        ("PostToolUse", false),
         ("PermissionRequest", true),
     ]
 

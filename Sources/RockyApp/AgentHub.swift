@@ -136,7 +136,19 @@ final class AgentHub: ObservableObject {
         }
 
         let knownBefore = Set(store.sessions.keys)
+        let pendingBefore = store.sessions[envelope.event.sessionId]?.pending?.requestId
         store.apply(envelope, at: Date())
+        // A pending request the store just dropped (tool ran, turn stopped, or
+        // a newer request replaced it) still has a hook blocked on the other
+        // end. Release it now so it exits clean instead of burning its 58s
+        // deadline, and stop its timeout from firing a late decision.
+        if let stale = pendingBefore,
+           stale != envelope.requestId,
+           store.sessions[envelope.event.sessionId]?.pending?.requestId != stale {
+            timeoutTasks[stale]?.cancel()
+            timeoutTasks[stale] = nil
+            server.reply(.passthrough, to: stale)
+        }
         if let guiPid = resolveTerminalApp(envelope.hookPid) {
             store.setTerminalApp(pid: guiPid, sessionId: envelope.event.sessionId)
         }
