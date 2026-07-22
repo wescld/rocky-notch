@@ -555,11 +555,24 @@ enum SessionMeta {
         }
     }
 
+    /// Host GUI app chip (Warp, Cursor, …). Hidden when it would duplicate
+    /// the agent chip — Cursor Agent hosted in Cursor would otherwise show
+    /// "Cursor · Cursor".
     static func terminalLabel(_ session: AgentSession) -> String? {
         guard let pid = session.terminalAppPid,
-              let app = NSRunningApplication(processIdentifier: pid)
+              let app = NSRunningApplication(processIdentifier: pid),
+              let name = app.localizedName, !name.isEmpty
         else { return nil }
-        return app.localizedName
+        if name.caseInsensitiveCompare(agentLabel(session)) == .orderedSame {
+            return nil
+        }
+        return name
+    }
+
+    /// Label for the "hand off to the host UI" button (Decision.ask).
+    /// Cursor is an IDE, not a terminal; keep CLI agents as "In terminal".
+    static func askFallbackTitle(_ session: AgentSession) -> String {
+        session.agent == "cursor" ? "In IDE" : "In terminal"
     }
 
     static func elapsed(_ session: AgentSession) -> String {
@@ -709,7 +722,7 @@ struct PendingSessionCard: View {
                             hub.decide(requestId: pending.requestId, decision: .deny)
                         }
                     }
-                    ActionButton(title: "In terminal", style: .neutral) {
+                    ActionButton(title: SessionMeta.askFallbackTitle(session), style: .neutral) {
                         RockyVoice.shared.tap()
                         hub.decide(requestId: pending.requestId, decision: .ask)
                     }
