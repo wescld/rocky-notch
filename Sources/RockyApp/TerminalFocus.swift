@@ -51,6 +51,23 @@ enum TerminalFocus {
         return errno == EPERM
     }
 
+    /// Agent CLI still running **and** still named like the agent.
+    /// After Ctrl+C the PID can be reused by an unrelated process; a bare
+    /// `kill(pid, 0)` would keep the Rocky card forever in that case.
+    static func isAgentProcessStillValid(pid: Int32, agent: String) -> Bool {
+        guard isProcessAlive(pid) else { return false }
+        let markers = agentNameMarkers(for: agent)
+        // Cursor is hosted in the GUI app — no separate CLI name to check.
+        guard !markers.isEmpty else { return true }
+        guard let name = processName(of: pid_t(pid))?.lowercased() else {
+            // Process exists but name is unreadable — keep (fail-open).
+            return true
+        }
+        return markers.contains {
+            name == $0 || name.hasPrefix($0) || name.contains($0)
+        }
+    }
+
     static func focus(session: AgentSession) {
         guard let pid = session.terminalAppPid,
               let app = NSRunningApplication(processIdentifier: pid)

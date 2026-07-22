@@ -63,16 +63,24 @@ final class AgentHub: ObservableObject {
     }
 
     /// Drop sessions that can no longer be interacted with:
-    /// 1. idle past `orphanTimeout` (2h)
-    /// 2. host GUI process (terminal/IDE) has exited
-    /// 3. Cursor app fully quit (sessionEnd often never fires on force-quit)
+    /// 1. idle past `idleRetentionTimeout` (~5 min after Stop — click-to-jump)
+    /// 2. any status past `orphanTimeout` (2h) with no pending request
+    /// 3. agent CLI process exited / PID reused (even if Warp/Cursor still up)
+    /// 4. host GUI process (terminal/IDE) has exited
+    /// 5. Cursor app fully quit (sessionEnd often never fires on force-quit)
+    ///
+    /// Codex has no SessionEnd; Stop only marks idle. Without (1) and (3),
+    /// closed Codex sessions stick in the notch while Warp stays open.
     private func pruneStaleSessions() {
         let before = Set(store.sessions.keys)
         store.pruneOrphans(now: Date())
 
-        var abandoned = store.pruneDeadHosts { pid in
-            TerminalFocus.isProcessAlive(pid)
-        }
+        var abandoned = store.pruneDeadHosts(
+            isAgentAlive: { pid, agent in
+                TerminalFocus.isAgentProcessStillValid(pid: pid, agent: agent)
+            },
+            isHostAlive: { TerminalFocus.isProcessAlive($0) }
+        )
 
         // Cursor force-quit safety net: drop only the sessions whose host PID
         // was never resolved (guiAncestor missed Cursor's todesktop bundle).

@@ -67,11 +67,19 @@ if agent == "grok",
     exit(0)
 }
 
-// Cursor preToolUse fires for every tool. Read-only tools never need a human.
+// Cursor preToolUse fires for every tool (even in full Auto-run / YOLO).
+// Skip the Rocky gate for read-only tools and when Agent already has
+// fullAutoRun — otherwise Rocky becomes a second approval UI. Cursor wants
+// an explicit {permission:allow} decision (same as read-only auto-pass).
 if agent == "cursor",
    event.kind == .permissionRequest,
-   CursorToolPolicy.shouldAutoPass(toolName: event.toolName) {
-    debugLog("auto-pass tool=\(event.toolName ?? "-")")
+   CursorToolPolicy.shouldSkipRockyGate(
+       toolName: event.toolName,
+       permissionMode: event.permissionMode
+   ) {
+    debugLog(
+        "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? "config")"
+    )
     if let output = PermissionRequestOutput.stdout(for: .allow, agent: agent) {
         FileHandle.standardOutput.write(output)
     }

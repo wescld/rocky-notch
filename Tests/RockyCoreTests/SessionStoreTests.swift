@@ -185,6 +185,45 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNotNil(store.sessions["s2"])
     }
 
+    func testIdleRetentionIsShorterThanOrphanTimeout() {
+        // Codex Stop with Warp still open: card should vanish after ~5 min,
+        // not stick for the full 2h orphan window.
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "done"), at: t0)
+        store.apply(envelope("Stop", session: "done"), at: t0 + 1)
+        store.apply(envelope("SessionStart", session: "running"), at: t0)
+        store.setTerminalApp(pid: 100, sessionId: "done")
+        store.setTerminalApp(pid: 100, sessionId: "running")
+
+        store.pruneOrphans(now: t0 + 6 * 60)
+        XCTAssertNil(store.sessions["done"], "idle past idleRetentionTimeout")
+        XCTAssertNotNil(store.sessions["running"], "running still within orphanTimeout")
+    }
+
+    func testIdleRetentionKeepsFreshDoneCards() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "done"), at: t0)
+        store.apply(envelope("Stop", session: "done"), at: t0 + 1)
+
+        store.pruneOrphans(now: t0 + 2 * 60)
+        XCTAssertNotNil(store.sessions["done"], "still inside click-to-jump window")
+    }
+
+    func testPruneDeadHostsUsesAgentNameCheck() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "s1"), at: t0)
+        store.setTerminalApp(pid: 100, sessionId: "s1")
+        store.setAgentProcess(pid: 200, sessionId: "s1")
+
+        // Host alive; agent PID "alive" but name check fails (PID reuse).
+        let abandoned = store.pruneDeadHosts(
+            isAgentAlive: { _, _ in false },
+            isHostAlive: { $0 == 100 }
+        )
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertTrue(abandoned.isEmpty)
+    }
+
     func testActiveTimeAccumulatesWithCappedGaps() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

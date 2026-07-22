@@ -114,8 +114,10 @@ struct AgentIntegration {
 
             Cursor uses preToolUse for blocking hooks (plus session lifecycle \
             events). Rocky auto-passes read-only tools (Read, Grep, …) and \
-            prompts for Shell, Write, Delete, Task, and MCP. Decisions return \
-            Cursor's {permission: allow|deny|ask} JSON.
+            auto-passes everything when Agent is in full Auto-run / YOLO \
+            (composer fullAutoRun, or session mode). In normal prompt mode, \
+            Rocky asks about Shell, Write, Delete, Task, and MCP. Decisions \
+            return Cursor's {permission: allow|deny|ask} JSON.
             """
         )
     }
