@@ -21,14 +21,19 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "SessionEnd": self = .sessionEnd
             case "Stop": self = .stop
             case "Notification": self = .notification
-            // Grok has no PermissionRequest; PreToolUse is the blocking
-            // channel and maps to the same approval UI flow.
-            case "PermissionRequest", "PreToolUse": self = .permissionRequest
+            // Grok/Cursor have no PermissionRequest; PreToolUse and Cursor's
+            // beforeShellExecution / beforeMCPExecution map to the same
+            // approval UI flow. beforeReadFile can also block, but Rocky
+            // installs it as fire-and-forget (silent fail-open).
+            case "PermissionRequest", "PreToolUse",
+                 "BeforeShellExecution", "BeforeMCPExecution":
+                self = .permissionRequest
             // The tool ran, so whatever gate it was waiting on is settled.
             // This is the only signal we get when the user approves at the
             // terminal: the agent moves on without telling the pending hook.
             case "PostToolUse": self = .postToolUse
-            case "UserPromptSubmit": self = .userPromptSubmit
+            case "UserPromptSubmit", "BeforeSubmitPrompt":
+                self = .userPromptSubmit
             default: self = .unknown(name)
             }
         }
@@ -48,6 +53,11 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "pretooluse": return "PreToolUse"
             case "posttooluse": return "PostToolUse"
             case "userpromptsubmit": return "UserPromptSubmit"
+            case "beforesubmitprompt": return "BeforeSubmitPrompt"
+            case "beforeshellexecution": return "BeforeShellExecution"
+            case "beforemcpexecution": return "BeforeMCPExecution"
+            case "beforereadfile": return "BeforeReadFile"
+            case "afterfileedit": return "AfterFileEdit"
             default: return name
             }
         }
@@ -81,11 +91,15 @@ public struct HookEvent: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case sessionIdCamel = "sessionId"
+        case conversationId = "conversation_id"
+        case conversationIdCamel = "conversationId"
         case hookEventName = "hook_event_name"
         case hookEventNameCamel = "hookEventName"
         case cwd
         case workspaceRoot
         case workspace_root
+        case workspaceRoots = "workspace_roots"
+        case workspaceRootsCamel = "workspaceRoots"
         case transcriptPath = "transcript_path"
         case transcriptPathCamel = "transcriptPath"
         case permissionMode = "permission_mode"
@@ -94,6 +108,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case toolNameCamel = "toolName"
         case toolInput = "tool_input"
         case toolInputCamel = "toolInput"
+        /// Cursor beforeShellExecution puts the shell line at the top level.
+        case command
         case message
         case notificationType = "type"
         case notificationTypeAlt = "notification_type"
@@ -111,17 +127,48 @@ public struct HookEvent: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        sessionId = try Self.decodeRequiredString(c, .sessionId, .sessionIdCamel)
+        sessionId = try Self.decodeRequiredString(
+            c, .sessionId, .sessionIdCamel, .conversationId, .conversationIdCamel
+        )
         let rawEventName = try Self.decodeRequiredString(c, .hookEventName, .hookEventNameCamel)
         hookEventName = Kind.canonical(rawEventName)
-        cwd = try Self.decodeOptionalString(c, .cwd)
+        var resolvedCwd = try Self.decodeOptionalString(c, .cwd)
             ?? Self.decodeOptionalString(c, .workspaceRoot)
             ?? Self.decodeOptionalString(c, .workspace_root)
+        if resolvedCwd == nil {
+            if let roots = try c.decodeIfPresent([String].self, forKey: .workspaceRoots)
+                ?? c.decodeIfPresent([String].self, forKey: .workspaceRootsCamel),
+               let first = roots.first, !first.isEmpty {
+                resolvedCwd = first
+            }
+        }
+        cwd = resolvedCwd
         transcriptPath = try Self.decodeOptionalString(c, .transcriptPath, .transcriptPathCamel)
         permissionMode = try Self.decodeOptionalString(c, .permissionMode, .permissionModeCamel)
-        toolName = try Self.decodeOptionalString(c, .toolName, .toolNameCamel)
-        toolInput = try c.decodeIfPresent(JSONValue.self, forKey: .toolInput)
+        var resolvedToolName = try Self.decodeOptionalString(c, .toolName, .toolNameCamel)
+        var resolvedToolInput = try c.decodeIfPresent(JSONValue.self, forKey: .toolInput)
             ?? c.decodeIfPresent(JSONValue.self, forKey: .toolInputCamel)
+        // Cursor beforeShellExecution: { "command": "npm test", … } without tool_name.
+        if let shellCommand = try Self.decodeOptionalString(c, .command), !shellCommand.isEmpty {
+            if resolvedToolName == nil {
+                // MCP payloads may also carry `command` (server launcher); only
+                // invent Shell when the event is shell or the name is still empty.
+                let isMCP = hookEventName == "BeforeMCPExecution"
+                resolvedToolName = isMCP ? (resolvedToolName ?? "MCP") : "Shell"
+            }
+            if resolvedToolInput == nil {
+                resolvedToolInput = .object(["command": .string(shellCommand)])
+            }
+        }
+        // beforeMCPExecution often has tool_name already; prefix for policy.
+        if hookEventName == "BeforeMCPExecution",
+           let name = resolvedToolName,
+           !name.hasPrefix("MCP:"),
+           !name.hasPrefix("mcp:") {
+            resolvedToolName = "MCP:\(name)"
+        }
+        toolName = resolvedToolName
+        toolInput = resolvedToolInput
         message = try c.decodeIfPresent(String.self, forKey: .message)
         notificationType = try Self.decodeOptionalString(
             c, .notificationType, .notificationTypeAlt, .notificationTypeCamel
@@ -194,17 +241,22 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public var toolSummary: String? {
         guard let toolName else { return nil }
         switch toolName {
-        case "Bash", "run_terminal_command", "PowerShell":
+        case "Bash", "Shell", "run_terminal_command", "PowerShell":
             return toolInput?["command"]?.stringValue ?? "shell command"
-        case "Edit", "Write", "Read", "NotebookEdit",
+        case "Edit", "Write", "Read", "NotebookEdit", "Delete",
              "search_replace", "write", "read_file", "MultiEdit":
             return toolInput?["file_path"]?.stringValue
                 ?? toolInput?["target_file"]?.stringValue
+                ?? toolInput?["path"]?.stringValue
                 ?? toolName
         case "WebFetch", "web_fetch", "open_page", "web_fetch_url":
             return toolInput?["url"]?.stringValue ?? toolName
-        case "WebSearch", "web_search":
+        case "WebSearch", "web_search", "SemanticSearch":
             return toolInput?["query"]?.stringValue ?? toolName
+        case "Task":
+            return toolInput?["description"]?.stringValue
+                ?? toolInput?["prompt"]?.stringValue
+                ?? toolName
         default:
             return toolName
         }

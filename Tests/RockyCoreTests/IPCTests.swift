@@ -71,4 +71,38 @@ final class IPCTests: XCTestCase {
             "/Users/w/Library/Application Support/rocky/rocky.sock"
         )
     }
+
+    func testCursorPermissionOutputFormat() throws {
+        let allow = try XCTUnwrap(PermissionRequestOutput.stdout(for: .allow, agent: "cursor"))
+        let allowRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: allow) as? [String: Any]
+        )
+        XCTAssertEqual(allowRoot["permission"] as? String, "allow")
+        XCTAssertEqual(allowRoot["continue"] as? Bool, true)
+        XCTAssertNil(allowRoot["user_message"])
+        XCTAssertNil(allowRoot["userMessage"])
+
+        let deny = try XCTUnwrap(PermissionRequestOutput.stdout(for: .deny, agent: "cursor"))
+        let denyRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: deny) as? [String: Any]
+        )
+        XCTAssertEqual(denyRoot["permission"] as? String, "deny")
+        XCTAssertEqual(denyRoot["continue"] as? Bool, false)
+        XCTAssertEqual(denyRoot["userMessage"] as? String, "Denied in Rocky")
+        XCTAssertEqual(
+            denyRoot["agentMessage"] as? String,
+            "The user denied this action in Rocky."
+        )
+        XCTAssertNil(denyRoot["user_message"])
+
+        let ask = try XCTUnwrap(PermissionRequestOutput.stdout(for: .ask, agent: "cursor"))
+        let askRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: ask) as? [String: Any]
+        )
+        XCTAssertEqual(askRoot["permission"] as? String, "ask")
+        XCTAssertEqual(askRoot["continue"] as? Bool, true)
+        XCTAssertEqual(askRoot["userMessage"] as? String, "Approve in Rocky or Cursor")
+
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "cursor"))
+    }
 }
