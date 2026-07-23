@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Your AI coding agents, living in the notch.</b><br />
-  Watch every Claude Code, Codex, and Grok session and approve permissions without leaving your flow.
+  Watch every Claude Code, Codex, Grok, Cursor, and Kimi session and approve permissions without leaving your flow.
 </p>
 
 <p align="center">
@@ -40,6 +40,7 @@ injection or screen scraping. The approval flow:
 ```
 Claude Code ── PermissionRequest hook ──▶ rocky-hook ── unix socket ──▶ Rocky
 Grok        ── PreToolUse hook         ──▶ rocky-hook ── unix socket ──▶ Rocky
+Kimi        ── PreToolUse hook (plugin)──▶ rocky-hook ── unix socket ──▶ Rocky
      ◀── allow / deny ◀───────────────────────────────────◀── you click
 ```
 
@@ -56,7 +57,7 @@ prompt appears. Rocky can never block your work.
 - Token usage and working time per session
 - Rocky speaks in soft musical chimes when something needs you
 - Menu bar mode for notchless displays
-- Claude Code, Codex, Grok, and Cursor supported today; more agents welcome via PRs
+- Claude Code, Codex, Grok, Cursor, and Kimi Code supported today; more agents welcome via PRs
 - 100% local. No server, no telemetry, no account.
 
 ## Install
@@ -87,6 +88,7 @@ conservatively, never touching your other settings):
 | Codex | `~/.codex/hooks.json` |
 | Grok | `~/.grok/hooks/rocky.json` |
 | Cursor | `~/.cursor/hooks.json` |
+| Kimi Code | `~/.kimi-code/plugins/` (dedicated plugin) |
 
 Removing the integration removes only Rocky's entries. Grok uses
 `PreToolUse` for blocking (no `PermissionRequest`). Cursor uses its
@@ -95,6 +97,13 @@ approval; `beforeSubmitPrompt` + `stop` for session lifecycle) — there is
 no `preToolUse` or `sessionStart` on Cursor, and file edits cannot be
 gated (`afterFileEdit` is observational only). Cursor's config is flat
 (`version` + hook command arrays).
+
+Kimi Code loads hooks from user plugins, so Rocky installs a dedicated
+`rocky-notch` plugin (a registry entry in `installed.json` plus its own
+folder) — run `/plugins reload` in an open Kimi session, or start a new
+one, after installing. Kimi uses `PreToolUse` and is deny-only, and its
+mode isn't exposed to hooks, so Rocky observes Kimi by default and gates
+tool calls only when you enable it for `auto` / `yolo` sessions.
 
 ## Development
 
