@@ -97,6 +97,51 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.pending?.toolName, "run_terminal_command")
     }
 
+    /// Grok dual-loads `~/.claude/settings.json` hooks (compat.claude).
+    /// SessionStart often arrives as claude-code first, then grok — the chip
+    /// must upgrade to Grok instead of sticking on Claude.
+    func testGrokClaudeCompatDualFireUpgradesAgentLabel() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0) // agent: claude-code
+        XCTAssertEqual(store.sessions["s1"]?.agent, "claude-code")
+
+        let grokStart = HookEnvelope(
+            requestId: "r-g",
+            hookPid: 2,
+            agent: "grok",
+            event: HookEvent(
+                sessionId: "s1",
+                hookEventName: "SessionStart",
+                cwd: "/tmp/proj"
+            )
+        )
+        store.apply(grokStart, at: t0 + 0.01)
+        XCTAssertEqual(store.sessions["s1"]?.agent, "grok")
+
+        // Later Claude-compat PostToolUse must not demote the label.
+        store.apply(envelope("PostToolUse", requestId: "r-pt", toolName: "Read"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.agent, "grok")
+    }
+
+    func testPreferredAgentNeverDemotesAwayFromGrok() {
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "grok", incoming: "claude-code"),
+            "grok"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "claude-code", incoming: "grok"),
+            "grok"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "claude-code", incoming: "claude-code"),
+            "claude-code"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "cursor", incoming: "claude-code"),
+            "cursor"
+        )
+    }
+
     func testNotificationTypes() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
@@ -135,6 +180,27 @@ final class SessionStoreTests: XCTestCase {
         store.setAgentProcess(pid: 200, sessionId: "codex-1")
 
         let abandoned = store.pruneDeadHosts { pid in pid == 100 } // only Warp alive
+        XCTAssertTrue(store.sessions.isEmpty)
+        XCTAssertTrue(abandoned.isEmpty)
+    }
+
+    func testPruneDeadHostsDropsWhenAgentNameNoLongerMatches() {
+        // PID reused by an unrelated process after the agent exits.
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "codex",
+                event: HookEvent(sessionId: "c1", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        store.setTerminalApp(pid: 100, sessionId: "c1")
+        store.setAgentProcess(pid: 200, sessionId: "c1")
+
+        let abandoned = store.pruneDeadHosts(
+            isAgentAlive: { _, _ in false }, // name no longer matches / dead
+            isHostAlive: { $0 == 100 }
+        )
         XCTAssertTrue(store.sessions.isEmpty)
         XCTAssertTrue(abandoned.isEmpty)
     }
@@ -207,6 +273,75 @@ final class SessionStoreTests: XCTestCase {
         // s1 is stale and dropped; s2 has a pending request and survives.
         XCTAssertNil(store.sessions["s1"])
         XCTAssertNotNil(store.sessions["s2"])
+    }
+
+    func testIdleSessionsPrunedAfterShortRetention() {
+        // Stop without SessionEnd (Codex/Grok): card must not stick until 2h.
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.setAgentProcess(pid: 99, sessionId: "s1")
+        store.apply(envelope("Stop"), at: t0 + 1)
+
+        store.pruneOrphans(now: t0 + 1 + 4 * 60)
+        XCTAssertNotNil(store.sessions["s1"], "still inside 5m click-to-jump window")
+
+        store.pruneOrphans(now: t0 + 1 + 6 * 60)
+        XCTAssertNil(store.sessions["s1"])
+    }
+
+    func testWaitingInputPrunedAfterRetention() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.setAgentProcess(pid: 99, sessionId: "s1")
+        store.apply(envelope("Notification", type: "idle_prompt"), at: t0 + 1)
+
+        store.pruneOrphans(now: t0 + 1 + 9 * 60)
+        XCTAssertNotNil(store.sessions["s1"])
+
+        store.pruneOrphans(now: t0 + 1 + 11 * 60)
+        XCTAssertNil(store.sessions["s1"])
+    }
+
+    func testUntrackedAgentPrunedSoonerThanFullOrphan() {
+        // SessionStart only, agent PID never resolved, process already gone.
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "codex",
+                event: HookEvent(sessionId: "c1", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        // No setAgentProcess — untracked.
+        store.pruneOrphans(now: t0 + 14 * 60)
+        XCTAssertNotNil(store.sessions["c1"])
+
+        store.pruneOrphans(now: t0 + 16 * 60)
+        XCTAssertNil(store.sessions["c1"])
+    }
+
+    func testUntrackedTimeoutDoesNotApplyToCursor() {
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                requestId: "r", hookPid: 1, agent: "cursor",
+                event: HookEvent(sessionId: "cur", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        // Cursor has no separate CLI PID; use full orphan window, not untracked.
+        store.pruneOrphans(now: t0 + 20 * 60)
+        XCTAssertNotNil(store.sessions["cur"])
+
+        store.pruneOrphans(now: t0 + 3 * 60 * 60)
+        XCTAssertNil(store.sessions["cur"])
+    }
+
+    func testPendingSurvivesAllRetentionTimeouts() {
+        var store = SessionStore()
+        store.apply(envelope("PermissionRequest", toolName: "Bash"), at: t0)
+        store.pruneOrphans(now: t0 + 3 * 60 * 60)
+        XCTAssertNotNil(store.sessions["s1"]?.pending)
     }
 
     func testActiveTimeAccumulatesWithCappedGaps() {

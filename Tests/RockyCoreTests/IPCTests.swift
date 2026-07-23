@@ -13,12 +13,25 @@ final class IPCTests: XCTestCase {
                 cwd: "/tmp/x",
                 toolName: "Bash",
                 toolInput: .object(["command": .string("ls")])
-            )
+            ),
+            agentProcessPid: 12345
         )
         let line = try NDJSON.encodeLine(envelope)
         XCTAssertEqual(line.last, 0x0A)
         let decoded = try NDJSON.decode(HookEnvelope.self, from: line.dropLast())
         XCTAssertEqual(decoded, envelope)
+        XCTAssertEqual(decoded.agentProcessPid, 12345)
+    }
+
+    func testEnvelopeDecodesWithoutAgentProcessPid() throws {
+        // Older hooks / tests omit the field — must not fail decode.
+        let json = """
+        {"agent":"codex","event":{"cwd":"/tmp","hook_event_name":"SessionStart","session_id":"s1"},"hookPid":9,"requestId":"r"}
+        """
+        let decoded = try NDJSON.decode(HookEnvelope.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.agentProcessPid)
+        XCTAssertEqual(decoded.agent, "codex")
+        XCTAssertEqual(decoded.hookPid, 9)
     }
 
     func testDecisionRoundTrip() throws {
