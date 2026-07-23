@@ -58,6 +58,40 @@ kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null
 check "stop: exit 0" "0" "$code"
 check "stop: sem output" "" "$out"
 
+# 6-9. Kimi Code: plugin-model provider, deny-only, mode-aware gate.
+# Unbundled test binary reads UserDefaults under the "Rocky" domain.
+KIMI_READ='{"session_id":"kimi-it","hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"path":"x"}}'
+KIMI_BASH='{"session_id":"kimi-it","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"}}'
+
+# 6. Read-only tool: the hook auto-passes without contacting the app.
+out=$(echo "$KIMI_READ" | $HOOK --agent kimi-code); code=$?
+check "kimi read-only: exit 0" "0" "$code"
+check "kimi read-only: silent (auto-pass)" "" "$out"
+
+# 7. Gate off (default): the app observes and releases the hook silently.
+defaults delete Rocky kimiGateEnabled 2>/dev/null
+ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+check "kimi gate-off: exit 0" "0" "$code"
+check "kimi gate-off: silent (observe)" "" "$out"
+
+# 8. Gate on + deny: block reaches Kimi as permissionDecision (not Claude shape).
+defaults write Rocky kimiGateEnabled -bool true 2>/dev/null
+ROCKY_AUTODECIDE=deny ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+echo "$out" | grep -q '"permissionDecision":"deny"' && PASS=$((PASS+1)) \
+  && echo "ok: kimi gate-on deny: JSON correto" \
+  || { FAIL=$((FAIL+1)); echo "FAIL: kimi gate-on deny: output [$out]"; }
+
+# 9. Gate on + allow: deny-only means allow is silent (empty stdout).
+ROCKY_AUTODECIDE=allow ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+check "kimi gate-on allow: silent (deny-only)" "" "$out"
+defaults delete Rocky kimiGateEnabled 2>/dev/null
+
 echo "---"
 echo "passou: $PASS, falhou: $FAIL"
 [ "$FAIL" -eq 0 ]

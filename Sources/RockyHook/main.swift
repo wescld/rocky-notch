@@ -74,22 +74,34 @@ if agent == "cursor",
     exit(0)
 }
 
-// Resolve the agent CLI PID **now**, while this process is still a child of
-// the agent tree. The app used to walk ancestry after we exit; by then the
-// hook PID is often reaped and agentProcessPid stayed nil → sticky cards.
-let hookPid = ProcessInfo.processInfo.processIdentifier
-let agentPid = ProcessAncestry.agentAncestor(of: hookPid, agent: agent)
-if let agentPid {
-    debugLog("agentPid=\(agentPid) for agent=\(agent)")
-} else {
-    debugLog("agentPid unresolved for agent=\(agent)")
-}
+  // Kimi PreToolUse fires for every tool, including the ones Kimi itself
+  // auto-approves. Auto-pass those so Rocky never shows a card Kimi would not —
+  // the rest is forwarded, and whether the app actually gates it is the user's
+  // "gate Kimi" setting (Kimi is deny-only; gating only helps in auto/yolo).
+  if agent == "kimi-code",
+     event.kind == .permissionRequest,
+     KimiToolPolicy.shouldAutoPass(toolName: event.toolName) {
+      debugLog("auto-pass tool=\(event.toolName ?? "-")")
+      exit(0)
+  }
 
-let envelope = HookEnvelope(
-    agent: agent,
-    event: event,
-    agentProcessPid: agentPid
-)
+  // Resolve the agent CLI PID **now**, while this process is still a child of
+  // the agent tree. The app used to walk ancestry after we exit; by then the
+  // hook PID is often reaped and agentProcessPid stayed nil → sticky cards.
+  let hookPid = ProcessInfo.processInfo.processIdentifier
+  let agentPid = ProcessAncestry.agentAncestor(of: hookPid, agent: agent)
+  if let agentPid {
+      debugLog("agentPid=\(agentPid) for agent=\(agent)")
+  } else {
+      debugLog("agentPid unresolved for agent=\(agent)")
+  }
+
+  let envelope = HookEnvelope(
+      agent: agent,
+      event: event,
+      agentProcessPid: agentPid
+  )
+
 guard let line = try? NDJSON.encodeLine(envelope) else {
     failOpen("encode")
 }

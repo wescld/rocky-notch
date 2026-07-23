@@ -551,8 +551,16 @@ enum SessionMeta {
         case "codex": return "Codex"
         case "grok": return "Grok"
         case "cursor": return "Cursor"
+        case "kimi-code": return "Kimi"
         default: return session.agent.capitalized
         }
+    }
+
+    /// Approve-button label. Kimi's hook is deny-only: allowing does not approve
+    /// on the user's behalf, it just lets Kimi proceed — so "Continue" is honest
+    /// where "Approve" would overpromise. "Block" stays effective.
+    static func approveTitle(_ session: AgentSession) -> String {
+        session.agent == "kimi-code" ? "Continue" : "Approve"
     }
 
     /// Host GUI app chip (Warp, Cursor, …). Hidden when it would duplicate
@@ -713,7 +721,7 @@ struct PendingSessionCard: View {
                 }
                 HStack(spacing: 7) {
                     if ask == nil {
-                        ActionButton(title: "Approve", style: .fill(Palette.green)) {
+                        ActionButton(title: SessionMeta.approveTitle(session), style: .fill(Palette.green)) {
                             RockyVoice.shared.approve()
                             hub.decide(requestId: pending.requestId, decision: .allow)
                         }
@@ -722,9 +730,14 @@ struct PendingSessionCard: View {
                             hub.decide(requestId: pending.requestId, decision: .deny)
                         }
                     }
-                    ActionButton(title: SessionMeta.askFallbackTitle(session), style: .neutral) {
-                        RockyVoice.shared.tap()
-                        hub.decide(requestId: pending.requestId, decision: .ask)
+                    // Kimi is deny-only and gated only in auto / yolo, where it
+                    // never falls back to a terminal prompt — "In terminal" would
+                    // just mean "Continue". Hide it so the card reads Continue / Deny.
+                    if session.agent != "kimi-code" {
+                        ActionButton(title: SessionMeta.askFallbackTitle(session), style: .neutral) {
+                            RockyVoice.shared.tap()
+                            hub.decide(requestId: pending.requestId, decision: .ask)
+                        }
                     }
                     Spacer()
                     TimeoutBar(since: pending.receivedAt, total: 55)

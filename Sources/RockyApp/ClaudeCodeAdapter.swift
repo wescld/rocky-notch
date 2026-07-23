@@ -40,6 +40,12 @@ struct AgentIntegration {
     /// like `~/.claude/settings.json` set this false so uninstall never removes
     /// a file that still carries the user's own keys.
     var removesConfigWhenEmpty: Bool = false
+    /// Set for providers that install via a plugin registry instead of merging a
+    /// hooks config file (Kimi Code). When present, the lifecycle methods below
+    /// delegate to it; `configURL`/`configStyle` are then unused. This keeps the
+    /// file-based providers' path untouched — a dedicated `IntegrationInstaller`
+    /// protocol can subsume both once a second plugin-style provider appears.
+    var pluginBackend: KimiPluginBackend? = nil
 
     /// The hook binary lives next to the app executable inside the bundle.
     static var hookBinaryPath: String {
@@ -124,12 +130,58 @@ struct AgentIntegration {
         )
     }
 
+    static var kimi: AgentIntegration {
+        // $KIMI_CODE_HOME if the app inherited it, else ~/.kimi-code.
+        let kimiHome = ProcessInfo.processInfo.environment["KIMI_CODE_HOME"]
+            .map { URL(fileURLWithPath: $0) }
+            ?? home.appendingPathComponent(".kimi-code")
+        let commandArguments = "--agent kimi-code"
+        let events = KimiPluginMerger.kimiEvents
+        return AgentIntegration(
+            // Kimi installs as a plugin; configURL/configStyle are unused (the
+            // pluginBackend owns install/uninstall). configURL points at the
+            // shared registry only so logs and paths read sensibly.
+            displayName: "Kimi",
+            configURL: kimiHome.appendingPathComponent("plugins/installed.json"),
+            presenceDirectory: kimiHome,
+            events: events,
+            commandArguments: commandArguments,
+            configStyle: .nestedGroups,
+            installNote: """
+
+            Kimi Code uses PreToolUse (not PermissionRequest) for blocking \
+            hooks, and it is deny-only: Rocky can block a tool call, but \
+            "Continue" only lets Kimi proceed — in manual mode Kimi still shows \
+            its own prompt. So Rocky observes Kimi by default and acts as the \
+            gate when you run Kimi in auto / yolo. Rocky installs a dedicated \
+            plugin; run `/plugins reload` in an open Kimi session (or restart \
+            Kimi) for it to take effect.
+            """,
+            pluginBackend: KimiPluginBackend(
+                kimiHome: kimiHome,
+                commandArguments: commandArguments,
+                events: events
+            )
+        )
+    }
+
     /// Only offer integrations for CLIs that exist on this machine.
     var isAgentPresent: Bool {
         FileManager.default.fileExists(atPath: presenceDirectory.path)
     }
 
+    /// One-line "what to expect" sentence for the install confirmation. The
+    /// config-file agents gate by default, so their sessions prompt for
+    /// approval; Kimi's plugin observes by default (its deny-only gate is
+    /// opt-in), so promising a prompt would be wrong.
+    var installExpectation: String {
+        pluginBackend != nil
+            ? "New sessions will show up in Rocky."
+            : "New sessions will show up with permission approval."
+    }
+
     var isInstalled: Bool {
+        if let pluginBackend { return pluginBackend.isInstalled }
         let data = try? Data(contentsOf: configURL)
         switch configStyle {
         case .nestedGroups:
@@ -142,6 +194,9 @@ struct AgentIntegration {
     /// True when installed but stale: moved bundle or missing newly added
     /// hook events. Re-merging is idempotent and self-heals both.
     var needsReinstall: Bool {
+        if let pluginBackend {
+            return pluginBackend.isInstalled && !pluginBackend.isCurrent
+        }
         guard isInstalled else { return false }
         let data = try? Data(contentsOf: configURL)
         switch configStyle {
@@ -163,6 +218,10 @@ struct AgentIntegration {
     }
 
     func install() throws {
+        if let pluginBackend {
+            try pluginBackend.install()
+            return
+        }
         let existing = try? Data(contentsOf: configURL)
         let merged: Data
         do {
@@ -189,6 +248,10 @@ struct AgentIntegration {
     }
 
     func uninstall() throws {
+        if let pluginBackend {
+            try pluginBackend.uninstall()
+            return
+        }
         guard let existing = try? Data(contentsOf: configURL) else { return }
         let cleaned: Data
         do {

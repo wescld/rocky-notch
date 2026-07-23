@@ -174,6 +174,15 @@ public struct SessionStore: Equatable, Sendable {
             // up until the decision timeout.
             session.pending = nil
             if session.status == .waitingPermission { session.status = .running }
+            // Kimi has no transcript for Rocky to tail, so its live activity
+            // ("running npm test", "editing App.swift") comes from the tool it
+            // just ran — the same friendly phrasing the transcript path uses.
+            if envelope.agent == "kimi-code", let toolName = event.toolName {
+                session.lastAction = TranscriptTail.friendly(
+                    tool: toolName,
+                    input: event.toolInput?.objectValue
+                )
+            }
         case .stop:
             session.status = .idle
             session.pending = nil

@@ -161,4 +161,34 @@ final class HookEventTests: XCTestCase {
         XCTAssertEqual(event.prompt, "fix the auth bug")
         XCTAssertEqual(event.cwd, "/tmp/p")
     }
+
+    /// Kimi sends UserPromptSubmit `prompt` as a structured array, not a string.
+    /// Decoding must still yield the text so the "You: …" task chip works —
+    /// a plain String decode would throw and drop the whole event.
+    func testDecodesKimiArrayPrompt() throws {
+        let event = try decode("""
+        {
+          "session_id": "s",
+          "hook_event_name": "UserPromptSubmit",
+          "prompt": [{"type": "text", "text": "fix the auth bug"}]
+        }
+        """)
+        XCTAssertEqual(event.kind, .userPromptSubmit)
+        XCTAssertEqual(event.prompt, "fix the auth bug")
+    }
+
+    func testKimiMultiPartPromptJoinsTextAndSkipsNonText() throws {
+        let event = try decode("""
+        {
+          "session_id": "s",
+          "hook_event_name": "UserPromptSubmit",
+          "prompt": [
+            {"type": "text", "text": "look at"},
+            {"type": "image"},
+            {"type": "text", "text": "this screenshot"}
+          ]
+        }
+        """)
+        XCTAssertEqual(event.prompt, "look at this screenshot")
+    }
 }

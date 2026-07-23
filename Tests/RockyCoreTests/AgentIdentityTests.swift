@@ -48,6 +48,26 @@ final class AgentIdentityTests: XCTestCase {
         )
     }
 
+    /// Kimi Code is identified purely by the explicit flag our plugin installs;
+    /// its payload carries no distinguishing env, and the flag must win even if
+    /// Kimi was shelled out from a Grok session that exported GROK_*.
+    func testExplicitKimiCodeAgent() {
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "kimi-code"],
+                environment: [:]
+            ),
+            "kimi-code"
+        )
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "kimi-code"],
+                environment: grokEnv
+            ),
+            "kimi-code"
+        )
+    }
+
     func testMalformedFlagFallsBackInsteadOfConsumingGarbage() {
         // Trailing flag with no value.
         XCTAssertEqual(

@@ -118,6 +118,9 @@ public enum PermissionRequestOutput {
             if agent == "cursor" {
                 return cursorStdout(for: decision)
             }
+            if agent == "kimi-code" {
+                return kimiStdout(for: decision)
+            }
             return claudeStdout(for: decision, updatedInput: updatedInput)
         }
     }
@@ -149,6 +152,22 @@ public enum PermissionRequestOutput {
             object["reason"] = .string("Denied in Rocky")
         }
         return encode(.object(object))
+    }
+
+    /// Kimi Code's PreToolUse hook is deny-only: only an explicit deny is
+    /// honored, as `{"hookSpecificOutput":{"permissionDecision":"deny",
+    /// "permissionDecisionReason":…}}`. Allow is not expressible — the hook
+    /// exits silently (empty stdout, exit 0) and Kimi's own permission flow
+    /// proceeds. So allow/ask/passthrough all return nil; only deny prints.
+    private static func kimiStdout(for decision: Decision) -> Data? {
+        guard decision == .deny else { return nil }
+        let payload: JSONValue = .object([
+            "hookSpecificOutput": .object([
+                "permissionDecision": .string("deny"),
+                "permissionDecisionReason": .string("Denied in Rocky"),
+            ])
+        ])
+        return encode(payload)
     }
 
     private static func cursorStdout(for decision: Decision) -> Data? {
