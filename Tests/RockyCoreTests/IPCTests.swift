@@ -99,6 +99,25 @@ final class IPCTests: XCTestCase {
         XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "kimi-code"))
     }
 
+    func testOpenCodePermissionOutputFormat() throws {
+        // OpenCode's JS bridge expects the simple Grok-shaped decision object.
+        let allow = try XCTUnwrap(PermissionRequestOutput.stdout(for: .allow, agent: "opencode"))
+        let allowRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: allow) as? [String: Any]
+        )
+        XCTAssertEqual(allowRoot["decision"] as? String, "allow")
+        XCTAssertNil(allowRoot["hookSpecificOutput"])
+
+        let deny = try XCTUnwrap(PermissionRequestOutput.stdout(for: .deny, agent: "opencode"))
+        let denyRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: deny) as? [String: Any]
+        )
+        XCTAssertEqual(denyRoot["decision"] as? String, "deny")
+
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .ask, agent: "opencode"))
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "opencode"))
+    }
+
     func testSocketPath() {
         XCTAssertEqual(
             IPC.socketPath(home: "/Users/w"),

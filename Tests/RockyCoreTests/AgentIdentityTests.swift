@@ -90,4 +90,22 @@ final class AgentIdentityTests: XCTestCase {
             "claude-code"
         )
     }
+
+    func testExplicitOpenCodeAgent() {
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "opencode"],
+                environment: [:]
+            ),
+            "opencode"
+        )
+        // Explicit flag wins over inherited Grok env.
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "opencode"],
+                environment: grokEnv
+            ),
+            "opencode"
+        )
+    }
 }

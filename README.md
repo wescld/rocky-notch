@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Your AI coding agents, living in the notch.</b><br />
-  Watch every Claude Code, Codex, Grok, Cursor, and Kimi session and approve permissions without leaving your flow.
+  Watch every Claude Code, Codex, Grok, Cursor, Kimi, and OpenCode session and approve permissions without leaving your flow.
 </p>
 
 <p align="center">
@@ -41,6 +41,7 @@ injection or screen scraping. The approval flow:
 Claude Code ── PermissionRequest hook ──▶ rocky-hook ── unix socket ──▶ Rocky
 Grok        ── PreToolUse hook         ──▶ rocky-hook ── unix socket ──▶ Rocky
 Kimi        ── PreToolUse hook (plugin)──▶ rocky-hook ── unix socket ──▶ Rocky
+OpenCode    ── JS plugin (permission.ask) ──▶ rocky-hook ── unix socket ──▶ Rocky
      ◀── allow / deny ◀───────────────────────────────────◀── you click
 ```
 
@@ -57,7 +58,7 @@ prompt appears. Rocky can never block your work.
 - Token usage and working time per session
 - Rocky speaks in soft musical chimes when something needs you
 - Menu bar mode for notchless displays
-- Claude Code, Codex, Grok, Cursor, and Kimi Code supported today; more agents welcome via PRs
+- Claude Code, Codex, Grok, Cursor, Kimi Code, and OpenCode supported today; more agents welcome via PRs
 - 100% local. No server, no telemetry, no account.
 
 ## Install
@@ -89,6 +90,7 @@ conservatively, never touching your other settings):
 | Grok | `~/.grok/hooks/rocky.json` |
 | Cursor | `~/.cursor/hooks.json` |
 | Kimi Code | `~/.kimi-code/plugins/` (dedicated plugin) |
+| OpenCode | `~/.config/opencode/plugins/rocky-notch.js` (JS bridge plugin) |
 
 Removing the integration removes only Rocky's entries. Grok uses
 `PreToolUse` for blocking (no `PermissionRequest`). Cursor uses its
@@ -96,7 +98,11 @@ official hooks (`beforeShellExecution` / `beforeMCPExecution` for
 approval; `beforeSubmitPrompt` + `stop` for session lifecycle) — there is
 no `preToolUse` or `sessionStart` on Cursor, and file edits cannot be
 gated (`afterFileEdit` is observational only). Cursor's config is flat
-(`version` + hook command arrays).
+(`version` + hook command arrays). OpenCode has no shell hooks — Rocky
+installs a local JS plugin that bridges `permission.ask` and session
+events to `rocky-hook`. Restart OpenCode after install; approval cards
+only fire for tools set to `"ask"` in `opencode.json` (OpenCode defaults
+to allow-all).
 
 Kimi Code loads hooks from user plugins, so Rocky installs a dedicated
 `rocky-notch` plugin (a registry entry in `installed.json` plus its own
