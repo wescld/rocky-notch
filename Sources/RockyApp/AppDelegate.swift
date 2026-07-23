@@ -223,6 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             RockyVoice.shared.question()
             self?.notchController?.revealPending()
         }
+        hub.onWaitingInput = { [weak self] _ in
+            // Softer than the permission chime: nothing is blocking on a
+            // timeout, but the user still has to come back to this session.
+            RockyVoice.shared.attention()
+            self?.notchController?.revealPending()
+        }
         hub.onSessionIdle = { _ in
             RockyVoice.shared.done()
         }

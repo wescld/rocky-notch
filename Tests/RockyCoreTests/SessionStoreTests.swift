@@ -10,7 +10,8 @@ final class SessionStoreTests: XCTestCase {
         requestId: String = "r1",
         type: String? = nil,
         toolName: String? = nil,
-        agentId: String? = nil
+        agentId: String? = nil,
+        lastAssistantMessage: String? = nil
     ) -> HookEnvelope {
         HookEnvelope(
             requestId: requestId,
@@ -22,6 +23,7 @@ final class SessionStoreTests: XCTestCase {
                 cwd: "/tmp/proj",
                 toolName: toolName,
                 notificationType: type,
+                lastAssistantMessage: lastAssistantMessage,
                 agentId: agentId
             )
         )
@@ -206,16 +208,179 @@ final class SessionStoreTests: XCTestCase {
         )
     }
 
+    /// Only an explicit "the agent is blocked" signal may claim the user's
+    /// attention. idle_prompt fires at the end of every idle turn, so treating
+    /// it as "needs you" would paint every finished session amber and bury the
+    /// ones that genuinely are.
     func testNotificationTypes() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
         store.apply(envelope("Notification", type: "idle_prompt"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.status, .idle)
+        XCTAssertNil(store.sessions["s1"]?.waitingInputReason)
+
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 2)
         XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+        XCTAssertEqual(store.sessions["s1"]?.waitingInputReason, .agentNeedsInput)
+
+        store.apply(envelope("UserPromptSubmit"), at: t0 + 3)
+        store.apply(envelope("Notification", type: "elicitation_dialog"), at: t0 + 4)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+        XCTAssertEqual(store.sessions["s1"]?.waitingInputReason, .elicitation)
 
         // permission_prompt is redundant with PermissionRequest — no change.
-        store.apply(envelope("SessionStart"), at: t0 + 2)
-        store.apply(envelope("Notification", type: "permission_prompt"), at: t0 + 3)
+        store.apply(envelope("UserPromptSubmit"), at: t0 + 5)
+        store.apply(envelope("Notification", type: "permission_prompt"), at: t0 + 6)
         XCTAssertEqual(store.sessions["s1"]?.status, .running)
+    }
+
+    // MARK: - Agent handoff message
+
+    /// The whole point: the notch can show what the agent left the user with
+    /// ("Want me to commit?") instead of a bare "done" they have to open a
+    /// terminal to decode.
+    func testStopCapturesTheAgentsClosingMessage() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(
+            envelope("Stop", lastAssistantMessage: "Tests pass. Want me to commit?"),
+            at: t0 + 1
+        )
+        XCTAssertEqual(store.sessions["s1"]?.lastAgentMessage, "Tests pass. Want me to commit?")
+        XCTAssertEqual(store.sessions["s1"]?.status, .idle)
+    }
+
+    /// Agents that don't hand us the text stay blank rather than guess.
+    func testStopWithoutMessageLeavesHandoffEmpty() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop"), at: t0 + 1)
+        XCTAssertNil(store.sessions["s1"]?.lastAgentMessage)
+    }
+
+    /// Stop fires at the end of every turn, including one the agent ended
+    /// blocked. It must not erase a wait that arrived just before it.
+    func testStopDoesNotOverwriteAnExplicitWait() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+        store.apply(envelope("Stop", lastAssistantMessage: "Which environment?"), at: t0 + 2)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+        XCTAssertEqual(store.sessions["s1"]?.waitingInputReason, .agentNeedsInput)
+        XCTAssertEqual(store.sessions["s1"]?.lastAgentMessage, "Which environment?")
+    }
+
+    /// The user answered, so the handoff is spent.
+    func testNewPromptClearsTheHandoff() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+        store.apply(envelope("Stop", lastAssistantMessage: "Want me to commit?"), at: t0 + 2)
+
+        store.apply(envelope("UserPromptSubmit"), at: t0 + 3)
+        XCTAssertNil(store.sessions["s1"]?.lastAgentMessage)
+        XCTAssertNil(store.sessions["s1"]?.waitingInputReason)
+        XCTAssertEqual(store.sessions["s1"]?.status, .running)
+    }
+
+    /// Agents narrate what they did first and ask last, so the preview must
+    /// show the end of the message — the opening is recap the user doesn't
+    /// need to act on.
+    func testDisplayAgentMessageKeepsTheClosingWords() throws {
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(
+                from: "I refactored the parser.\n\n- split the lexer\n\nLet me know and I'll commit."
+            ),
+            "Let me know and I'll commit."
+        )
+        // Whitespace inside the closing line collapses.
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "Done.\n\n  Want me to\tcommit?  "),
+            "Want me to commit?"
+        )
+        // Tables/rules/fences are layout, not the message.
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(
+                from: "Results:\n\nWaiting on you to proceed.\n\n| file | ok |\n| --- | --- |"
+            ),
+            "Waiting on you to proceed."
+        )
+        // Blank and nil produce no handoff, so the row falls back to "done".
+        XCTAssertNil(SessionStore.displayAgentMessage(from: "   \n  "))
+        XCTAssertNil(SessionStore.displayAgentMessage(from: nil))
+    }
+
+    /// The notch row truncates again on width, so the preview must read from
+    /// its start — anchoring at the end leaves the reader with the middle of a
+    /// sentence once both cuts apply.
+    func testDisplayAgentMessageReadsFromTheStartOfTheClosingLine() throws {
+        let long = "Want me to apply the fixes? " + String(repeating: "detail ", count: 60)
+        let shown = try XCTUnwrap(SessionStore.displayAgentMessage(from: long))
+        XCTAssertEqual(shown.count, 140)
+        XCTAssertTrue(shown.hasPrefix("Want me to apply the fixes?"))
+        XCTAssertTrue(shown.hasSuffix("…"))
+    }
+
+    /// A finished turn that left words behind is worth reading, so it outlives
+    /// a bare "done" row.
+    func testHandoffOutlivesABareDoneRow() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.setAgentProcess(pid: 99, sessionId: "s1")
+        store.apply(envelope("Stop", lastAssistantMessage: "Want me to commit?"), at: t0 + 1)
+
+        store.pruneOrphans(now: t0 + 1 + 10 * 60)
+        XCTAssertNotNil(store.sessions["s1"], "past the 5m bare-done window")
+
+        store.pruneOrphans(now: t0 + 1 + 16 * 60)
+        XCTAssertNil(store.sessions["s1"], "but still bounded")
+    }
+
+    /// Punctuation, not vocabulary — the same check has to work whatever
+    /// language the agent replied in.
+    func testAsksSomethingReadsPunctuationNotWords() {
+        XCTAssertTrue(SessionStore.asksSomething("Quer que eu aplique os 3 P1?"))
+        XCTAssertTrue(SessionStore.asksSomething("Should I commit this?"))
+        XCTAssertTrue(SessionStore.asksSomething("¿Aplico los cambios?"))
+        XCTAssertTrue(SessionStore.asksSomething("现在提交吗？"))
+        // Asks phrased as statements stay neutral rather than guess.
+        XCTAssertFalse(SessionStore.asksSomething("Let me know and I'll commit."))
+        XCTAssertFalse(SessionStore.asksSomething("Me avise que faço o commit."))
+        XCTAssertFalse(SessionStore.asksSomething(nil))
+    }
+
+    /// The hint is computed on the full closing line, so a question mark that
+    /// falls past the display truncation still counts.
+    func testQuestionHintSurvivesTruncation() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        let long = "Quer que eu aplique " + String(repeating: "os itens ", count: 40) + "agora?"
+        store.apply(envelope("Stop", lastAssistantMessage: long), at: t0 + 1)
+
+        let session = store.sessions["s1"]
+        XCTAssertEqual(session?.handoffAsksSomething, true)
+        XCTAssertEqual(session?.lastAgentMessage?.hasSuffix("…"), true, "display text is cut")
+    }
+
+    func testNewPromptClearsTheQuestionHint() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop", lastAssistantMessage: "Commit?"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.handoffAsksSomething, true)
+
+        store.apply(envelope("UserPromptSubmit"), at: t0 + 2)
+        XCTAssertEqual(store.sessions["s1"]?.handoffAsksSomething, false)
+    }
+
+    /// idle_prompt confirms the turn ended, but must never pull a session out
+    /// of an explicit wait that arrived before it.
+    func testIdlePromptDoesNotDowngradeAnExplicitWait() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+        store.apply(envelope("Notification", type: "idle_prompt"), at: t0 + 2)
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+        XCTAssertEqual(store.sessions["s1"]?.waitingInputReason, .agentNeedsInput)
     }
 
     func testSubagentEventsIgnored() {
@@ -353,17 +518,34 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.sessions["s1"])
     }
 
-    func testWaitingInputPrunedAfterRetention() {
+    /// A session the agent reported as blocked must survive the user stepping
+    /// away — expiring it after a few minutes defeats the whole state.
+    func testExplicitWaitingInputSurvivesTheUserSteppingAway() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
         store.setAgentProcess(pid: 99, sessionId: "s1")
-        store.apply(envelope("Notification", type: "idle_prompt"), at: t0 + 1)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
 
-        store.pruneOrphans(now: t0 + 1 + 9 * 60)
+        store.pruneOrphans(now: t0 + 1 + 45 * 60)
+        XCTAssertNotNil(store.sessions["s1"], "must outlive a lunch break")
+
+        // Still bounded: the orphan timeout is the backstop.
+        store.pruneOrphans(now: t0 + 1 + 3 * 60 * 60)
+        XCTAssertNil(store.sessions["s1"])
+    }
+
+    /// The untracked leash still wins: with no agent PID we cannot see the CLI
+    /// exit, so a waiting session must not linger for hours.
+    func testUntrackedWaitingSessionStillCappedByShortLeash() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)  // no setAgentProcess
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+
+        store.pruneOrphans(now: t0 + 1 + 10 * 60)
         XCTAssertNotNil(store.sessions["s1"])
 
-        store.pruneOrphans(now: t0 + 1 + 11 * 60)
-        XCTAssertNil(store.sessions["s1"])
+        store.pruneOrphans(now: t0 + 1 + 16 * 60)
+        XCTAssertNil(store.sessions["s1"], "capped by untrackedAgentTimeout")
     }
 
     func testUntrackedAgentPrunedSoonerThanFullOrphan() {
@@ -508,6 +690,36 @@ final class SessionStoreTests: XCTestCase {
         store.apply(envelope("SessionStart", session: "old"), at: t0)
         store.apply(envelope("SessionStart", session: "new"), at: t0 + 10)
         XCTAssertEqual(store.ordered.map(\.id), ["new", "old"])
+    }
+
+    /// The row that wants the user must be findable without scanning past the
+    /// ones still happily working — recency alone buries it.
+    func testSessionsNeedingTheUserSortFirst() {
+        var store = SessionStore()
+        // Asked a question a while ago, then kept being pushed down by others.
+        store.apply(envelope("SessionStart", session: "asked"), at: t0)
+        store.apply(
+            envelope("Stop", session: "asked", lastAssistantMessage: "Commit?"),
+            at: t0 + 1
+        )
+        // Busy and recent.
+        store.apply(envelope("SessionStart", session: "busy"), at: t0 + 50)
+        // Explicitly blocked, older than "busy".
+        store.apply(envelope("SessionStart", session: "blocked"), at: t0 + 10)
+        store.apply(
+            envelope("Notification", session: "blocked", type: "agent_needs_input"),
+            at: t0 + 11
+        )
+
+        XCTAssertEqual(store.ordered.map(\.id), ["blocked", "asked", "busy"])
+    }
+
+    func testOrderingIsStableForEquallyRankedSessions() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart", session: "b"), at: t0)
+        store.apply(envelope("SessionStart", session: "a"), at: t0)
+        // Same rank and same timestamp — id breaks the tie deterministically.
+        XCTAssertEqual(store.ordered.map(\.id), ["a", "b"])
     }
 
     /// Kimi has no transcript to tail, so its live activity is derived from the

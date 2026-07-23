@@ -23,6 +23,19 @@ public struct PendingPermission: Equatable, Sendable {
     }
 }
 
+/// Why a session is waiting on the user. Only explicit signals from the agent
+/// set this — it is what separates "the agent told us it is blocked" from
+/// "the turn merely ended", so the notch can be loud about one and quiet about
+/// the other.
+public enum WaitingInputReason: Equatable, Sendable {
+    /// Agent notification: a background session is waiting on input.
+    case agentNeedsInput
+    /// An MCP server opened an elicitation form.
+    case elicitation
+    /// The user chose to answer at the terminal instead of the notch.
+    case permissionFallback
+}
+
 public struct AgentSession: Identifiable, Equatable, Sendable {
     public enum Status: Equatable, Sendable {
         case running
@@ -58,6 +71,20 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     public var activeSeconds: TimeInterval = 0
     /// What the user asked for (latest prompt, truncated).
     public var task: String?
+    /// The agent's closing words for the turn, normalized to one short line.
+    /// This is the handoff: "Want me to commit?" reads at a glance in the
+    /// notch, so the user knows which session needs them without opening a
+    /// terminal. Only set when the agent hands us the text (Claude's `Stop`
+    /// carries `last_assistant_message`); agents that don't stay blank rather
+    /// than guess.
+    public var lastAgentMessage: String?
+    /// The closing line carried a question mark. Display hint only — see
+    /// `SessionStore.asksSomething`. Computed before truncation so a question
+    /// past the cut still counts.
+    public var handoffAsksSomething: Bool = false
+    /// Set only by explicit "the agent is blocked" signals. `nil` while
+    /// `status == .waitingInput` never happens: the two move together.
+    public var waitingInputReason: WaitingInputReason?
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
@@ -81,10 +108,10 @@ public struct SessionStore: Equatable, Sendable {
     /// orphanTimeout).
     public var idleRetentionTimeout: TimeInterval = 5 * 60
 
-    /// After Notification idle / permission fallback the card says "your turn
-    /// in the terminal". If the user never comes back (and SessionEnd never
-    /// fires), drop on this shorter window instead of 2h.
-    public var waitingInputRetentionTimeout: TimeInterval = 10 * 60
+    /// A finished turn that left the user a message is a handoff worth reading,
+    /// so it outlives a bare "done" row — but still expires, because the user
+    /// may simply not care.
+    public var handoffRetentionTimeout: TimeInterval = 15 * 60
 
     /// Sessions where we never resolved an agent CLI PID cannot detect Ctrl+C.
     /// Cursor is excluded (no separate CLI). Everyone else gets this leash so
@@ -93,8 +120,28 @@ public struct SessionStore: Equatable, Sendable {
 
     public init() {}
 
+    /// Sessions that want the user float to the top. Sorting purely by recency
+    /// buries the one that asked something under the ones still working — which
+    /// is the row the user opened the notch to find. Ties fall back to recency,
+    /// then id, so equal rows never flicker between orderings.
     public var ordered: [AgentSession] {
-        sessions.values.sorted { $0.lastEventAt > $1.lastEventAt }
+        sessions.values.sorted { a, b in
+            let rankA = Self.attentionRank(a)
+            let rankB = Self.attentionRank(b)
+            if rankA != rankB { return rankA < rankB }
+            if a.lastEventAt != b.lastEventAt { return a.lastEventAt > b.lastEventAt }
+            return a.id < b.id
+        }
+    }
+
+    /// Lower sorts first. Proven signals outrank the question hint, which in
+    /// turn outranks work that needs nobody — a wrong hint costs a row one
+    /// position, never a state change.
+    static func attentionRank(_ session: AgentSession) -> Int {
+        if session.pending != nil { return 0 }
+        if session.status == .waitingInput { return 1 }
+        if session.status == .idle, session.handoffAsksSomething { return 2 }
+        return 3
     }
 
     public mutating func apply(_ envelope: HookEnvelope, at date: Date) {
@@ -156,6 +203,11 @@ public struct SessionStore: Equatable, Sendable {
             session.model = event.model ?? session.model
         case .userPromptSubmit:
             session.status = .running
+            // The user answered, so the previous handoff is spent: drop the
+            // closing message and any wait it was blocked on.
+            session.lastAgentMessage = nil
+            session.handoffAsksSomething = false
+            session.waitingInputReason = nil
             if let prompt = event.prompt {
                 session.task = Self.displayTask(from: prompt)
             }
@@ -169,11 +221,24 @@ public struct SessionStore: Equatable, Sendable {
                 toolInput: event.toolInput
             )
         case .notification:
-            // permission_prompt is redundant with PermissionRequest; the rest
-            // of the "needs you" types map to waitingInput.
+            // permission_prompt is redundant with PermissionRequest.
             switch event.notificationType {
-            case "idle_prompt", "agent_needs_input", "elicitation_dialog":
+            case "agent_needs_input":
                 session.status = .waitingInput
+                session.waitingInputReason = .agentNeedsInput
+            case "elicitation_dialog":
+                session.status = .waitingInput
+                session.waitingInputReason = .elicitation
+            case "idle_prompt":
+                // "Done and waiting for your next prompt" — fires at the end of
+                // every idle turn, so it says nothing about whether the agent is
+                // actually blocked on the user. Treating it as "needs you" would
+                // paint every finished session amber and bury the ones that do.
+                // It only confirms the turn ended; never downgrade a session
+                // that already reported an explicit block.
+                if session.waitingInputReason == nil {
+                    session.status = .idle
+                }
             default:
                 break
             }
@@ -193,8 +258,19 @@ public struct SessionStore: Equatable, Sendable {
                 )
             }
         case .stop:
-            session.status = .idle
+            // The agent's closing words are the handoff. Keep them so the notch
+            // can show what it left us with instead of a bare "done".
+            if let closing = Self.closingLine(from: event.lastAssistantMessage) {
+                session.lastAgentMessage = Self.displayAgentMessage(from: closing)
+                session.handoffAsksSomething = Self.asksSomething(closing)
+            }
             session.pending = nil
+            // Stop fires at the end of every turn, including one the agent
+            // ended blocked on the user. Only an unblocked turn is "done" —
+            // otherwise Stop would erase a wait that arrived just before it.
+            if session.waitingInputReason == nil {
+                session.status = .idle
+            }
         case .sessionEnd, .unknown:
             break
         }
@@ -246,6 +322,7 @@ public struct SessionStore: Equatable, Sendable {
             session.pending = nil
             if session.status == .waitingPermission {
                 session.status = fellBackToTerminal ? .waitingInput : .running
+                session.waitingInputReason = fellBackToTerminal ? .permissionFallback : nil
             }
             session.lastEventAt = date
             sessions[id] = session
@@ -257,25 +334,37 @@ public struct SessionStore: Equatable, Sendable {
             // Pending permission: keep until decided or dead-host prune.
             if session.pending != nil { return true }
             let age = now.timeIntervalSince(session.lastEventAt)
-            // Turn finished (Stop) — short click-to-jump window when we still
-            // know the host/agent. Pure observational rows (JSONL discovery /
-            // no PIDs) keep the longer orphan window so launch-seeded sessions
-            // aren't dropped on the first prune tick.
-            if session.status == .idle {
-                if session.agentProcessPid != nil || session.terminalAppPid != nil {
-                    return age < idleRetentionTimeout
-                }
+            // Pure observational rows (JSONL discovery / no PIDs) keep the
+            // longer orphan window so launch-seeded sessions aren't dropped
+            // on the first prune tick, regardless of any closing message.
+            if session.status == .idle,
+               session.agentProcessPid == nil,
+               session.terminalAppPid == nil {
                 return age < orphanTimeout
             }
-            // "Your turn in the terminal" — user walked away / session closed.
-            if session.status == .waitingInput {
-                return age < waitingInputRetentionTimeout
+
+            var limit = orphanTimeout
+            switch session.status {
+            case .idle:
+                // Turn finished — short click-to-jump window, unless the agent
+                // left words behind, which the user still has to read.
+                limit = session.lastAgentMessage == nil
+                    ? idleRetentionTimeout
+                    : handoffRetentionTimeout
+            case .waitingInput:
+                // The agent reported it is blocked on the user, so the row
+                // stays until the agent or its host actually goes away.
+                // Expiring it because the user stepped out defeats the state.
+                limit = orphanTimeout
+            case .running, .waitingPermission:
+                break
             }
-            // No agent PID: cannot detect CLI exit; short leash (not Cursor).
+            // No agent PID: cannot detect CLI exit, so cap whatever the status
+            // asked for with a short leash (Cursor has no separate CLI).
             if session.agentProcessPid == nil, session.agent != "cursor" {
-                return age < untrackedAgentTimeout
+                limit = min(limit, untrackedAgentTimeout)
             }
-            return age < orphanTimeout
+            return age < limit
         }
     }
 
@@ -352,6 +441,69 @@ public struct SessionStore: Equatable, Sendable {
         if incoming == "claude-code", current != "claude-code" { return current }
         if current == "claude-code" { return incoming }
         return current
+    }
+
+    /// One-line preview of the agent's closing message for the notch.
+    ///
+    /// Agents narrate what they did first and put the ask last, so the preview
+    /// starts from the message's last line rather than its opening recap.
+    ///
+    /// Within that line it keeps the *beginning*. The notch row is far narrower
+    /// than this budget and truncates again visually, so anchoring anywhere but
+    /// the start leaves the reader with the middle of a sentence — measured in
+    /// practice, it renders as noise.
+    ///
+    /// Returns nil for blank input so the session falls back to "done" rather
+    /// than showing an empty handoff.
+    public static func displayAgentMessage(
+        from raw: String?,
+        maxLength: Int = 140
+    ) -> String? {
+        guard let flat = closingLine(from: raw) else { return nil }
+        guard flat.count > maxLength else { return flat }
+        return String(flat.prefix(maxLength - 1)) + "…"
+    }
+
+    /// The agent's last line with prose in it, collapsed to one line.
+    /// Shared so the question hint reads the same text the user sees — but
+    /// before truncation, which would hide a question mark past the cut.
+    public static func closingLine(from raw: String?) -> String? {
+        guard let raw else { return nil }
+        let lines = raw
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !isMarkdownScaffolding($0) }
+        // Fall back to the whole text when it is nothing but scaffolding.
+        let tail = lines.last ?? raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let flat = tail
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        return flat.isEmpty ? nil : flat
+    }
+
+    /// Whether the agent's closing line carries a question mark.
+    ///
+    /// Deliberately punctuation and not vocabulary: agents reply in whatever
+    /// language the user writes in, so a keyword list ("should I", "quer que
+    /// eu", …) would work in one and silently fail in the next. Punctuation
+    /// survives the translation.
+    ///
+    /// This is a display hint only — it never moves the state machine, plays a
+    /// sound, or changes retention, so a wrong guess costs one dot colour. It
+    /// catches direct questions and misses asks phrased as statements
+    /// ("let me know and I'll commit"), which stay neutral rather than guess.
+    public static func asksSomething(_ closingLine: String?) -> Bool {
+        guard let closingLine else { return false }
+        return closingLine.contains { "?？؟".contains($0) }
+    }
+
+    /// Table rows, rules and fences carry no message; skip them so the preview
+    /// lands on the agent's actual closing words. This is about layout, not
+    /// meaning — Rocky never tries to judge whether the text is a question.
+    private static func isMarkdownScaffolding(_ line: String) -> Bool {
+        if line.hasPrefix("|") || line.hasPrefix("```") { return true }
+        let rule = line.filter { !$0.isWhitespace }
+        return rule.count >= 3 && rule.allSatisfy { "-=*_#".contains($0) }
     }
 
     /// One-line task chip from a raw UserPromptSubmit prompt.
