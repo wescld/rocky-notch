@@ -106,6 +106,12 @@ public struct SessionStore: Equatable, Sendable {
             transcriptPath: nil,
             lastAction: nil
         )
+        // Grok loads Claude Code settings hooks by default
+        // (`[compat.claude] hooks = true`). Rocky is installed in both
+        // places, so one Grok session dual-fires envelopes — often
+        // `--agent claude-code` first, then `--agent grok`. Without an
+        // upgrade, the notch chip stuck on "Claude".
+        session.agent = Self.preferredAgent(current: session.agent, incoming: envelope.agent)
         // Active time: count the gap since the last event, capped so long
         // idle stretches don't inflate the number.
         let gap = date.timeIntervalSince(session.lastEventAt)
@@ -247,6 +253,18 @@ public struct SessionStore: Equatable, Sendable {
             return false
         }
         return abandoned
+    }
+
+    /// Resolve dual-fired Claude-compat hooks against the real agent.
+    ///
+    /// Prefer any non-`claude-code` identity over `claude-code`, and never
+    /// demote away from a more specific agent once known. Pure Claude
+    /// sessions only ever emit `claude-code` and stay labeled correctly.
+    public static func preferredAgent(current: String, incoming: String) -> String {
+        if current == incoming { return current }
+        if incoming == "claude-code", current != "claude-code" { return current }
+        if current == "claude-code" { return incoming }
+        return current
     }
 
     /// One-line task chip from a raw UserPromptSubmit prompt.

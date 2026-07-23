@@ -97,6 +97,51 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.pending?.toolName, "run_terminal_command")
     }
 
+    /// Grok dual-loads `~/.claude/settings.json` hooks (compat.claude).
+    /// SessionStart often arrives as claude-code first, then grok — the chip
+    /// must upgrade to Grok instead of sticking on Claude.
+    func testGrokClaudeCompatDualFireUpgradesAgentLabel() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0) // agent: claude-code
+        XCTAssertEqual(store.sessions["s1"]?.agent, "claude-code")
+
+        let grokStart = HookEnvelope(
+            requestId: "r-g",
+            hookPid: 2,
+            agent: "grok",
+            event: HookEvent(
+                sessionId: "s1",
+                hookEventName: "SessionStart",
+                cwd: "/tmp/proj"
+            )
+        )
+        store.apply(grokStart, at: t0 + 0.01)
+        XCTAssertEqual(store.sessions["s1"]?.agent, "grok")
+
+        // Later Claude-compat PostToolUse must not demote the label.
+        store.apply(envelope("PostToolUse", requestId: "r-pt", toolName: "Read"), at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.agent, "grok")
+    }
+
+    func testPreferredAgentNeverDemotesAwayFromGrok() {
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "grok", incoming: "claude-code"),
+            "grok"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "claude-code", incoming: "grok"),
+            "grok"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "claude-code", incoming: "claude-code"),
+            "claude-code"
+        )
+        XCTAssertEqual(
+            SessionStore.preferredAgent(current: "cursor", incoming: "claude-code"),
+            "cursor"
+        )
+    }
+
     func testNotificationTypes() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
