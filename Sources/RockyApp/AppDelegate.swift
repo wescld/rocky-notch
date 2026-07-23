@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuBarPanel: MenuBarPanelController?
     private let settings = SettingsWindowController()
     private var defaultsObserver: AnyCancellable?
-    private let integrations: [AgentIntegration] = [.claudeCode, .codex, .grok, .cursor, .kimi]
+    private let integrations: [AgentIntegration] = [.claudeCode, .codex, .grok, .cursor, .kimi, .openCode]
     let hub = AgentHub()
 
     func applicationDidFinishLaunching(_ notification: Notification) {

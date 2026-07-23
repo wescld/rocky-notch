@@ -552,6 +552,7 @@ enum SessionMeta {
         case "grok": return "Grok"
         case "cursor": return "Cursor"
         case "kimi-code": return "Kimi"
+        case "opencode": return "OpenCode"
         default: return session.agent.capitalized
         }
     }

@@ -42,10 +42,12 @@ struct AgentIntegration {
     var removesConfigWhenEmpty: Bool = false
     /// Set for providers that install via a plugin registry instead of merging a
     /// hooks config file (Kimi Code). When present, the lifecycle methods below
-    /// delegate to it; `configURL`/`configStyle` are then unused. This keeps the
-    /// file-based providers' path untouched — a dedicated `IntegrationInstaller`
-    /// protocol can subsume both once a second plugin-style provider appears.
+    /// delegate to it; `configURL`/`configStyle` are then unused.
     var pluginBackend: KimiPluginBackend? = nil
+    /// OpenCode installs a JS bridge plugin instead of merging a hooks config.
+    /// When present, lifecycle methods delegate to it; `configURL`/`configStyle`
+    /// are only used for path display.
+    var openCodeBackend: OpenCodePluginBackend? = nil
 
     /// The hook binary lives next to the app executable inside the bundle.
     static var hookBinaryPath: String {
@@ -165,23 +167,67 @@ struct AgentIntegration {
         )
     }
 
+    static var openCode: AgentIntegration {
+        let configHome = OpenCodePluginBackend.defaultConfigHome()
+        let commandArguments = "--agent opencode"
+        // Presence: config dir OR the CLI binary install at ~/.opencode.
+        let presence = FileManager.default.fileExists(atPath: configHome.path)
+            ? configHome
+            : home.appendingPathComponent(".opencode")
+        return AgentIntegration(
+            displayName: "OpenCode",
+            configURL: configHome.appendingPathComponent(
+                "plugins/\(OpenCodePluginMerger.pluginFileName)"
+            ),
+            presenceDirectory: presence,
+            events: [],
+            commandArguments: commandArguments,
+            configStyle: .nestedGroups,
+            installNote: """
+
+            OpenCode uses JavaScript plugins (not shell hooks). Rocky installs \
+            a bridge plugin at ~/.config/opencode/plugins/rocky-notch.js that \
+            forwards permission.ask and session events to rocky-hook. Restart \
+            OpenCode after installing. Approval cards only appear for tools \
+            whose permission is "ask" in opencode.json (OpenCode defaults to \
+            allow-all).
+            """,
+            openCodeBackend: OpenCodePluginBackend(
+                configHome: configHome,
+                commandArguments: commandArguments
+            )
+        )
+    }
+
     /// Only offer integrations for CLIs that exist on this machine.
     var isAgentPresent: Bool {
-        FileManager.default.fileExists(atPath: presenceDirectory.path)
+        if openCodeBackend != nil {
+            // OpenCode: config dir, or binary under ~/.opencode/bin, or on PATH.
+            if FileManager.default.fileExists(atPath: presenceDirectory.path) {
+                return true
+            }
+            let bin = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".opencode/bin/opencode")
+            if FileManager.default.fileExists(atPath: bin.path) { return true }
+            return false
+        }
+        return FileManager.default.fileExists(atPath: presenceDirectory.path)
     }
 
     /// One-line "what to expect" sentence for the install confirmation. The
     /// config-file agents gate by default, so their sessions prompt for
     /// approval; Kimi's plugin observes by default (its deny-only gate is
-    /// opt-in), so promising a prompt would be wrong.
+    /// opt-in), so promising a prompt would be wrong. OpenCode is similar:
+    /// sessions always show up; permission cards need permission: "ask".
     var installExpectation: String {
-        pluginBackend != nil
+        pluginBackend != nil || openCodeBackend != nil
             ? "New sessions will show up in Rocky."
             : "New sessions will show up with permission approval."
     }
 
     var isInstalled: Bool {
         if let pluginBackend { return pluginBackend.isInstalled }
+        if let openCodeBackend { return openCodeBackend.isInstalled }
         let data = try? Data(contentsOf: configURL)
         switch configStyle {
         case .nestedGroups:
@@ -196,6 +242,9 @@ struct AgentIntegration {
     var needsReinstall: Bool {
         if let pluginBackend {
             return pluginBackend.isInstalled && !pluginBackend.isCurrent
+        }
+        if let openCodeBackend {
+            return openCodeBackend.isInstalled && !openCodeBackend.isCurrent
         }
         guard isInstalled else { return false }
         let data = try? Data(contentsOf: configURL)
@@ -220,6 +269,10 @@ struct AgentIntegration {
     func install() throws {
         if let pluginBackend {
             try pluginBackend.install()
+            return
+        }
+        if let openCodeBackend {
+            try openCodeBackend.install()
             return
         }
         let existing = try? Data(contentsOf: configURL)
@@ -250,6 +303,10 @@ struct AgentIntegration {
     func uninstall() throws {
         if let pluginBackend {
             try pluginBackend.uninstall()
+            return
+        }
+        if let openCodeBackend {
+            try openCodeBackend.uninstall()
             return
         }
         guard let existing = try? Data(contentsOf: configURL) else { return }

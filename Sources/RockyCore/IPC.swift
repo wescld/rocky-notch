@@ -121,6 +121,11 @@ public enum PermissionRequestOutput {
             if agent == "kimi-code" {
                 return kimiStdout(for: decision)
             }
+            // OpenCode's JS bridge parses a simple decision object (same shape
+            // as Grok) — not Claude's nested hookSpecificOutput.
+            if agent == "opencode" {
+                return grokStdout(for: decision)
+            }
             return claudeStdout(for: decision, updatedInput: updatedInput)
         }
     }

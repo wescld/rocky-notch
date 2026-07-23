@@ -362,6 +362,33 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.tokens, 200)
     }
 
+    /// OpenCode has no transcript to tail; live activity comes from PostToolUse.
+    func testOpenCodePostToolUseSetsLiveActivity() {
+        var store = SessionStore()
+        store.apply(
+            HookEnvelope(
+                hookPid: 1, agent: "opencode",
+                event: HookEvent(sessionId: "oc", hookEventName: "SessionStart", cwd: "/tmp")
+            ),
+            at: t0
+        )
+        store.apply(
+            HookEnvelope(
+                hookPid: 1, agent: "opencode",
+                event: HookEvent(
+                    sessionId: "oc",
+                    hookEventName: "PostToolUse",
+                    toolName: "bash",
+                    toolInput: .object(["command": .string("npm test")])
+                )
+            ),
+            at: t0.addingTimeInterval(1)
+        )
+        XCTAssertNotNil(store.sessions["oc"]?.lastAction)
+        XCTAssertTrue(store.sessions["oc"]?.lastAction?.contains("npm test") == true
+            || store.sessions["oc"]?.lastAction?.lowercased().contains("bash") == true)
+    }
+
     func testUserPromptSetsTask() throws {
         var store = SessionStore()
         let env = HookEnvelope(

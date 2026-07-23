@@ -17,6 +17,10 @@ public enum ProcessAncestry {
         case "cursor":
             // Hosted in the Cursor app itself; no separate CLI to track.
             return []
+        case "opencode":
+            // Binary is `opencode`; Bun may appear in the tree when spawning
+            // the bridge plugin's child rocky-hook process.
+            return ["opencode"]
         default:
             return [agent.lowercased()]
         }

@@ -73,7 +73,7 @@ public enum TranscriptTail {
     }
 
     /// "editing auth.ts" beats "Edit: /very/long/path/auth.ts" at a glance.
-    static func friendly(tool: String, input: [String: Any]?) -> String {
+    public static func friendly(tool: String, input: [String: Any]?) -> String {
         func base(_ key: String) -> String? {
             (input?[key] as? String).map { ($0 as NSString).lastPathComponent }
         }
