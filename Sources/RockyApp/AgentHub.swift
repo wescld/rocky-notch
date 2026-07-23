@@ -63,16 +63,26 @@ final class AgentHub: ObservableObject {
     }
 
     /// Drop sessions that can no longer be interacted with:
-    /// 1. idle past `orphanTimeout` (2h)
-    /// 2. host GUI process (terminal/IDE) has exited
-    /// 3. Cursor app fully quit (sessionEnd often never fires on force-quit)
+    /// 1. idle past `idleRetentionTimeout` (~5 min after Stop — click-to-jump)
+    /// 2. waitingInput past `waitingInputRetentionTimeout` (~10 min)
+    /// 3. no agent PID past `untrackedAgentTimeout` (~15 min; not Cursor)
+    /// 4. any status past `orphanTimeout` (2h) with no pending request
+    /// 5. agent CLI process exited / PID reused (even if Warp/Cursor still up)
+    /// 6. host GUI process (terminal/IDE) has exited
+    /// 7. Cursor app fully quit (sessionEnd often never fires on force-quit)
+    ///
+    /// Codex/Grok have no reliable SessionEnd. Without (1)–(5), closed sessions
+    /// stick in the notch while Warp stays open.
     private func pruneStaleSessions() {
         let before = Set(store.sessions.keys)
         store.pruneOrphans(now: Date())
 
-        var abandoned = store.pruneDeadHosts { pid in
-            TerminalFocus.isProcessAlive(pid)
-        }
+        var abandoned = store.pruneDeadHosts(
+            isAgentAlive: { pid, agent in
+                TerminalFocus.isAgentProcessStillValid(pid: pid, agent: agent)
+            },
+            isHostAlive: { TerminalFocus.isProcessAlive($0) }
+        )
 
         // Cursor force-quit safety net: drop only the sessions whose host PID
         // was never resolved (guiAncestor missed Cursor's todesktop bundle).
@@ -152,7 +162,15 @@ final class AgentHub: ObservableObject {
         if let guiPid = resolveTerminalApp(envelope.hookPid) {
             store.setTerminalApp(pid: guiPid, sessionId: envelope.event.sessionId)
         }
-        if let agentPid = resolveAgentProcess(envelope.hookPid, envelope.agent) {
+        // Prefer the PID the hook resolved while still alive. Fall back to a
+        // post-hoc walk (often fails for fire-and-forget events — hook already
+        // reaped) so older hooks still work when the race is kind.
+        let sessionAgent = store.sessions[envelope.event.sessionId]?.agent
+            ?? envelope.agent
+        let agentPid = envelope.agentProcessPid
+            ?? resolveAgentProcess(envelope.hookPid, sessionAgent)
+            ?? resolveAgentProcess(envelope.hookPid, envelope.agent)
+        if let agentPid {
             store.setAgentProcess(pid: agentPid, sessionId: envelope.event.sessionId)
         }
 

@@ -74,7 +74,22 @@ if agent == "cursor",
     exit(0)
 }
 
-let envelope = HookEnvelope(agent: agent, event: event)
+// Resolve the agent CLI PID **now**, while this process is still a child of
+// the agent tree. The app used to walk ancestry after we exit; by then the
+// hook PID is often reaped and agentProcessPid stayed nil → sticky cards.
+let hookPid = ProcessInfo.processInfo.processIdentifier
+let agentPid = ProcessAncestry.agentAncestor(of: hookPid, agent: agent)
+if let agentPid {
+    debugLog("agentPid=\(agentPid) for agent=\(agent)")
+} else {
+    debugLog("agentPid unresolved for agent=\(agent)")
+}
+
+let envelope = HookEnvelope(
+    agent: agent,
+    event: event,
+    agentProcessPid: agentPid
+)
 guard let line = try? NDJSON.encodeLine(envelope) else {
     failOpen("encode")
 }

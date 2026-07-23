@@ -70,7 +70,24 @@ public struct SessionStore: Equatable, Sendable {
     public private(set) var sessions: [String: AgentSession] = [:]
 
     /// Sessions with no events for this long and no pending request are pruned.
+    /// Covers long-running cards whose host + agent are still up.
     public var orphanTimeout: TimeInterval = 2 * 60 * 60
+
+    /// After `Stop` the card stays briefly so the user can click-to-jump back
+    /// to the terminal. Codex/Grok have no reliable SessionEnd, so without a
+    /// short idle retention these "done" rows stick until Warp quits (or
+    /// orphanTimeout).
+    public var idleRetentionTimeout: TimeInterval = 5 * 60
+
+    /// After Notification idle / permission fallback the card says "your turn
+    /// in the terminal". If the user never comes back (and SessionEnd never
+    /// fires), drop on this shorter window instead of 2h.
+    public var waitingInputRetentionTimeout: TimeInterval = 10 * 60
+
+    /// Sessions where we never resolved an agent CLI PID cannot detect Ctrl+C.
+    /// Cursor is excluded (no separate CLI). Everyone else gets this leash so
+    /// a fire-and-forget SessionStart alone cannot stick for 2h.
+    public var untrackedAgentTimeout: TimeInterval = 15 * 60
 
     public init() {}
 
@@ -198,24 +215,46 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func pruneOrphans(now: Date) {
         sessions = sessions.filter { _, session in
-            session.pending != nil
-                || now.timeIntervalSince(session.lastEventAt) < orphanTimeout
+            // Pending permission: keep until decided or dead-host prune.
+            if session.pending != nil { return true }
+            let age = now.timeIntervalSince(session.lastEventAt)
+            // Turn finished (Stop) — short click-to-jump window.
+            if session.status == .idle {
+                return age < idleRetentionTimeout
+            }
+            // "Your turn in the terminal" — user walked away / session closed.
+            if session.status == .waitingInput {
+                return age < waitingInputRetentionTimeout
+            }
+            // No agent PID: cannot detect CLI exit; short leash (not Cursor).
+            if session.agentProcessPid == nil, session.agent != "cursor" {
+                return age < untrackedAgentTimeout
+            }
+            return age < orphanTimeout
         }
     }
 
     /// Drop sessions whose host GUI or agent CLI process is gone.
     /// Returns pending request ids so the hub can cancel decision timeouts.
-    /// Sessions with no resolved PIDs are left alone (orphan timeout still
-    /// applies).
+    /// Sessions with no resolved PIDs are left alone (orphan / retention
+    /// timeouts still apply).
+    ///
+    /// - `isAgentAlive`: CLI process still exists **and** still looks like the
+    ///   agent (name check guards against PID reuse after exit).
+    /// - `isHostAlive`: terminal/IDE process still exists.
     @discardableResult
-    public mutating func pruneDeadHosts(isAlive: (Int32) -> Bool) -> [String] {
+    public mutating func pruneDeadHosts(
+        isAgentAlive: (Int32, String) -> Bool,
+        isHostAlive: (Int32) -> Bool
+    ) -> [String] {
         var abandoned: [String] = []
         sessions = sessions.filter { _, session in
             var dead = false
-            if let pid = session.agentProcessPid, !isAlive(pid) {
+            if let pid = session.agentProcessPid,
+               !isAgentAlive(pid, session.agent) {
                 dead = true
             }
-            if let pid = session.terminalAppPid, !isAlive(pid) {
+            if let pid = session.terminalAppPid, !isHostAlive(pid) {
                 dead = true
             }
             guard dead else { return true }
@@ -225,6 +264,15 @@ public struct SessionStore: Equatable, Sendable {
             return false
         }
         return abandoned
+    }
+
+    /// Convenience for tests / simple callers that only check PID existence.
+    @discardableResult
+    public mutating func pruneDeadHosts(isAlive: (Int32) -> Bool) -> [String] {
+        pruneDeadHosts(
+            isAgentAlive: { pid, _ in isAlive(pid) },
+            isHostAlive: isAlive
+        )
     }
 
     /// Remove sessions for a given agent (e.g. Cursor quit with no sessionEnd

@@ -26,17 +26,24 @@ public struct HookEnvelope: Codable, Equatable, Sendable {
     public let hookPid: Int32
     public let agent: String
     public let event: HookEvent
+    /// Agent CLI PID walked from the hook process **while the hook is still
+    /// alive**. The app used to re-walk after the fire-and-forget hook exited,
+    /// which often failed and left `agentProcessPid` nil — sticky cards until
+    /// the 2h orphan timeout. Optional for backward-compatible decode.
+    public let agentProcessPid: Int32?
 
     public init(
         requestId: String = UUID().uuidString,
         hookPid: Int32 = ProcessInfo.processInfo.processIdentifier,
         agent: String = "claude-code",
-        event: HookEvent
+        event: HookEvent,
+        agentProcessPid: Int32? = nil
     ) {
         self.requestId = requestId
         self.hookPid = hookPid
         self.agent = agent
         self.event = event
+        self.agentProcessPid = agentProcessPid
     }
 }
 
