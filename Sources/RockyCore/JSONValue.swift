@@ -53,4 +53,22 @@ public enum JSONValue: Codable, Equatable, Sendable {
         if case .object(let dict) = self { return dict[key] }
         return nil
     }
+
+    /// The value as a Foundation object graph, for interop with APIs that take
+    /// `[String: Any]` (e.g. the friendly-action mapping shared with the
+    /// transcript path).
+    public var anyValue: Any {
+        switch self {
+        case .string(let value): return value
+        case .number(let value): return value
+        case .bool(let value): return value
+        case .null: return NSNull()
+        case .array(let value): return value.map(\.anyValue)
+        case .object(let value): return value.mapValues(\.anyValue)
+        }
+    }
+
+    public var objectValue: [String: Any]? {
+        anyValue as? [String: Any]
+    }
 }

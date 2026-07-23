@@ -65,6 +65,27 @@ final class IPCTests: XCTestCase {
         XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "grok"))
     }
 
+    func testKimiPermissionOutputFormat() throws {
+        // Kimi's PreToolUse hook is deny-only: only deny prints, as
+        // hookSpecificOutput.permissionDecision (not Claude's decision.behavior).
+        let deny = try XCTUnwrap(PermissionRequestOutput.stdout(for: .deny, agent: "kimi-code"))
+        let denyRoot = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: deny) as? [String: Any]
+        )
+        let specific = try XCTUnwrap(denyRoot["hookSpecificOutput"] as? [String: Any])
+        XCTAssertEqual(specific["permissionDecision"] as? String, "deny")
+        XCTAssertEqual(specific["permissionDecisionReason"] as? String, "Denied in Rocky")
+        // Must not leak the Claude-shaped payload Kimi would ignore.
+        XCTAssertNil(specific["decision"])
+        XCTAssertNil(specific["behavior"])
+
+        // Allow is not expressible (deny-only): the hook exits silently so
+        // Kimi's own permission flow proceeds. Same for ask / passthrough.
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .allow, agent: "kimi-code"))
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .ask, agent: "kimi-code"))
+        XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "kimi-code"))
+    }
+
     func testSocketPath() {
         XCTAssertEqual(
             IPC.socketPath(home: "/Users/w"),

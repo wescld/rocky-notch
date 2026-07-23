@@ -135,6 +135,17 @@ final class AgentHub: ObservableObject {
             return
         }
 
+        // Kimi is deny-only and its gate only helps in auto / yolo. Unless the
+        // user opted into gating, observe without carding: release the hook so
+        // Kimi's own flow proceeds. Session tracking still comes from Kimi's
+        // observe events (SessionStart, UserPromptSubmit, PostToolUse, Stop).
+        if envelope.event.kind == .permissionRequest,
+           envelope.agent == "kimi-code",
+           !Preferences.kimiGateEnabled {
+            server.reply(.passthrough, to: envelope.requestId)
+            return
+        }
+
         let knownBefore = Set(store.sessions.keys)
         let pendingBefore = store.sessions[envelope.event.sessionId]?.pending?.requestId
         store.apply(envelope, at: Date())

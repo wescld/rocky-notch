@@ -11,7 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuBarPanel: MenuBarPanelController?
     private let settings = SettingsWindowController()
     private var defaultsObserver: AnyCancellable?
-    private let integrations: [AgentIntegration] = [.claudeCode, .codex, .grok, .cursor]
+    private let integrations: [AgentIntegration] = [.claudeCode, .codex, .grok, .cursor, .kimi]
     let hub = AgentHub()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -170,9 +170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 alert.messageText = "Install the \(integration.displayName) integration?"
                 alert.informativeText = """
                 Rocky will add hooks to \(integration.configURL.path) \
-                (a .rocky-bak backup is created). New sessions will show \
-                up with permission approval. If Rocky isn't running, nothing \
-                changes in your workflow.\(integration.installNote)
+                (a .rocky-bak backup is created). \(integration.installExpectation) \
+                If Rocky isn't running, nothing changes in your workflow.\
+                \(integration.installNote)
                 """
                 alert.addButton(withTitle: "Install")
                 alert.addButton(withTitle: "Cancel")

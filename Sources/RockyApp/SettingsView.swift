@@ -9,8 +9,13 @@ struct SettingsView: View {
 
     @State private var displayMode = Preferences.displayMode
     @State private var soundsEnabled = Preferences.soundsEnabled
+    @State private var kimiGateEnabled = Preferences.kimiGateEnabled
     @State private var integrationError: String?
     @State private var refresh = 0
+
+    private var kimiInstalled: Bool {
+        integrations.contains { $0.pluginBackend != nil && $0.isInstalled }
+    }
 
     var body: some View {
         Form {
@@ -54,10 +59,31 @@ struct SettingsView: View {
                             } else {
                                 Button("Install") {
                                     perform { try integration.install() }
+                                    // Plugin-based agents (Kimi) don't hot-load:
+                                    // a running session must reload. Say so, once,
+                                    // right after a successful install.
+                                    if integration.pluginBackend != nil,
+                                       integrationError == nil {
+                                        Self.showPluginReloadReminder(integration.displayName)
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                if kimiInstalled {
+                    Toggle("Gate Kimi tool calls (auto / yolo mode)", isOn: $kimiGateEnabled)
+                        .onChange(of: kimiGateEnabled) { _, newValue in
+                            Preferences.kimiGateEnabled = newValue
+                        }
+                    Text(
+                        "Kimi is deny-only: Rocky can block a tool but not answer "
+                            + "Kimi's own prompt. Leave off for normal (manual) Kimi — "
+                            + "Rocky just observes. Turn on when you run Kimi in "
+                            + "auto / yolo and want Rocky as the approval gate."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 if let integrationError {
                     Text(integrationError)
@@ -94,6 +120,19 @@ struct SettingsView: View {
             integrationError = error.localizedDescription
         }
         refresh += 1
+    }
+
+    /// One-time nudge after installing a plugin-based integration (Kimi): the
+    /// hook won't fire in an already-open session until the plugin is reloaded.
+    private static func showPluginReloadReminder(_ displayName: String) {
+        let alert = NSAlert()
+        alert.messageText = "\(displayName) integration installed"
+        alert.informativeText = """
+        Start a new \(displayName) session, or run /plugins reload in an open \
+        one, for Rocky to take effect.
+        """
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 

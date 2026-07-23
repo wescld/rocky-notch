@@ -179,7 +179,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         lastAssistantMessage = try Self.decodeOptionalString(
             c, .lastAssistantMessage, .lastAssistantMessageCamel
         )
-        prompt = try c.decodeIfPresent(String.self, forKey: .prompt)
+        prompt = Self.decodeFlexiblePrompt(c, .prompt)
         agentId = try Self.decodeOptionalString(c, .agentId, .agentIdCamel)
     }
 
@@ -287,6 +287,29 @@ public struct HookEvent: Codable, Equatable, Sendable {
             if let value = try c.decodeIfPresent(String.self, forKey: key) {
                 return value
             }
+        }
+        return nil
+    }
+
+    /// A prompt part in Kimi's structured `UserPromptSubmit` payload.
+    private struct PromptPart: Decodable {
+        let text: String?
+    }
+
+    /// Claude / Grok send `prompt` as a plain string; Kimi sends it as
+    /// `[{"type":"text","text":"…"}]`. Accept both — decoding as String only
+    /// would throw on Kimi's array and drop the whole event, losing the
+    /// "You: …" task chip. Non-text parts (e.g. images) are skipped.
+    private static func decodeFlexiblePrompt(
+        _ c: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys
+    ) -> String? {
+        if let string = try? c.decodeIfPresent(String.self, forKey: key) {
+            return string
+        }
+        if let parts = try? c.decodeIfPresent([PromptPart].self, forKey: key) {
+            let text = parts.compactMap(\.text).joined(separator: " ")
+            return text.isEmpty ? nil : text
         }
         return nil
     }

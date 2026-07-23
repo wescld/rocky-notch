@@ -283,4 +283,34 @@ final class SessionStoreTests: XCTestCase {
         store.apply(envelope("SessionStart", session: "new"), at: t0 + 10)
         XCTAssertEqual(store.ordered.map(\.id), ["new", "old"])
     }
+
+    /// Kimi has no transcript to tail, so its live activity is derived from the
+    /// PostToolUse event — the notch shows what an autonomous session is doing.
+    func testKimiPostToolUseSetsLiveActivity() {
+        var store = SessionStore()
+        let start = HookEnvelope(
+            hookPid: 1, agent: "kimi-code",
+            event: HookEvent(sessionId: "k1", hookEventName: "SessionStart", cwd: "/tmp/p")
+        )
+        store.apply(start, at: t0)
+
+        let post = HookEnvelope(
+            hookPid: 1, agent: "kimi-code",
+            event: HookEvent(
+                sessionId: "k1", hookEventName: "PostToolUse",
+                toolName: "Bash", toolInput: .object(["command": .string("npm test")])
+            )
+        )
+        store.apply(post, at: t0 + 1)
+        XCTAssertEqual(store.sessions["k1"]?.lastAction, "running npm test")
+    }
+
+    /// The PostToolUse activity is Kimi-scoped: other agents keep getting their
+    /// activity from the transcript, so this must not start setting it for them.
+    func testNonKimiPostToolUseLeavesActivityUnset() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0) // agent: claude-code
+        store.apply(envelope("PostToolUse", toolName: "Bash"), at: t0 + 1)
+        XCTAssertNil(store.sessions["s1"]?.lastAction)
+    }
 }
