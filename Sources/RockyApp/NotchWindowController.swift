@@ -141,6 +141,10 @@ final class NotchWindowController {
     private var acknowledgedRequests: Set<String> = []
     private var generation = 0
     private var measuredContentHeight: CGFloat = 0
+    /// Whether `measuredContentHeight` describes the console that is mounted
+    /// right now. Cleared when it is torn down, so the next opening waits for
+    /// a real measurement instead of trusting the previous one.
+    private var hasFreshMeasurement = false
     private var screenMetrics: (notchWidth: CGFloat, notchHeight: CGFloat, hasNotch: Bool)?
 
     private func syncAndLayout() {
@@ -327,9 +331,11 @@ final class NotchWindowController {
             return
         case .collapsed:
             if state.wantsExpanded {
-                // Wait for the first measurement; the console has just been
-                // mounted and expanding on a stale height would jump twice.
-                if measuredContentHeight > 0 { beginExpand() }
+                // Wait for a measurement of the console as it is *now*. The
+                // last one belongs to the previous opening: sessions have come
+                // and gone since, so opening on it starts at the wrong height
+                // and visibly corrects itself a frame later.
+                if hasFreshMeasurement { beginExpand() }
             } else {
                 applyFrame(capSize(), on: screen)
             }
@@ -354,13 +360,10 @@ final class NotchWindowController {
         let size = expandedPanelSize()
         applyFrame(size, on: screen)
         guard abs(state.expandedHeight - size.height) > 0.5 else { return }
-        // Content grew or shrank while open: ride the same curve instead of
-        // snapping the silhouette to the new height.
-        if state.phase == .expanded {
-            withAnimation(Self.reveal) { state.expandedHeight = size.height }
-        } else {
-            state.expandedHeight = size.height
-        }
+        // The target moved — content grew or shrank, or a late measurement
+        // landed mid-open. Retarget on the same curve; assigning it outright
+        // while the reveal is in flight is what made the panel stutter.
+        withAnimation(Self.reveal) { state.expandedHeight = size.height }
     }
 
     private func beginExpand() {
@@ -404,6 +407,9 @@ final class NotchWindowController {
             // Reopened mid-collapse: the newer transition owns the panel now.
             guard !self.state.wantsExpanded else { return }
             self.state.phase = .collapsed
+            // The console unmounts with the phase; its height belongs to a
+            // layout that no longer exists.
+            self.hasFreshMeasurement = false
             self.applyFrame(self.capSize(), on: self.targetScreen)
         }
     }
@@ -413,7 +419,12 @@ final class NotchWindowController {
         guard raw.isFinite, raw > 0 else { return }
         let scale = targetScreen.backingScaleFactor
         let height = (raw * scale).rounded(.up) / scale
-        guard abs(height - measuredContentHeight) >= 1 / scale else { return }
+        let wasStale = !hasFreshMeasurement
+        hasFreshMeasurement = true
+        // The staleness check has to come first: remounting to the very same
+        // height is common, and skipping it on the epsilon test alone would
+        // leave the panel waiting for a measurement that never differs.
+        guard wasStale || abs(height - measuredContentHeight) >= 1 / scale else { return }
         measuredContentHeight = height
         // Measurement happens during a view update; resize on the next turn.
         DispatchQueue.main.async { [weak self] in self?.layout() }
