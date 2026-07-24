@@ -377,21 +377,35 @@ final class NotchWindowController {
         collapseTimer = nil
         state.expandedHeight = size.height
         applyFrame(size, on: screen)
+        // Push the resize through the view tree now rather than waiting for the
+        // next display cycle to get around to it.
+        panel.contentView?.layoutSubtreeIfNeeded()
 
-        // Let AppKit commit the new bounds before SwiftUI starts revealing
-        // inside them, otherwise the first frames animate in the old window.
-        DispatchQueue.main.async { [weak self] in
+        startReveal(generation: generation, width: size.width, attempt: 0)
+    }
+
+    /// The silhouette derives its width from the view's own bounds, so revealing
+    /// before SwiftUI has adopted the resized window animates a narrow island
+    /// inside a wide panel for a frame or two — the stutter only ever seen on
+    /// the first open, since reopening mid-close never shrank the window and so
+    /// has no resize to wait for.
+    private func startReveal(generation: Int, width: CGFloat, attempt: Int) {
+        guard generation == self.generation, state.wantsExpanded else { return }
+        // Bail out rather than stall: a late reveal beats a panel that never
+        // opens if the bounds never arrive.
+        if hosting.bounds.width + 0.5 < width, attempt < 5 {
+            DispatchQueue.main.async { [weak self] in
+                self?.startReveal(generation: generation, width: width, attempt: attempt + 1)
+            }
+            return
+        }
+        withAnimation(Self.reveal, completionCriteria: .removed) {
+            state.revealProgress = 1
+        } completion: { [weak self] in
             guard let self,
                   generation == self.generation,
                   self.state.wantsExpanded else { return }
-            withAnimation(Self.reveal, completionCriteria: .removed) {
-                self.state.revealProgress = 1
-            } completion: { [weak self] in
-                guard let self,
-                      generation == self.generation,
-                      self.state.wantsExpanded else { return }
-                self.state.phase = .expanded
-            }
+            self.state.phase = .expanded
         }
     }
 
