@@ -212,6 +212,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hub.onSessionIdle = { _ in
             RockyVoice.shared.done()
         }
+        hub.onSessionCompleted = { [weak self] session in
+            self?.notchController?.revealCompletion(sessionId: session.id)
+        }
     }
 
     /// Integration-test hook: ROCKY_AUTODECIDE=allow|deny|ask makes the

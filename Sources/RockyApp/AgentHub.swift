@@ -10,6 +10,8 @@ final class AgentHub: ObservableObject {
     @Published private(set) var serverError: String?
     /// Sessions that just finished a turn; Rocky celebrates them briefly.
     @Published private(set) var celebrating: Set<String> = []
+    /// Claude account rate limits (from statusLine cache), polled lightly.
+    @Published private(set) var claudeUsage: ClaudeUsageSnapshot?
 
     /// Hook-side timeout is 60s; we always decide 5s earlier so the hook
     /// exits cleanly (passthrough) instead of being killed.
@@ -18,11 +20,16 @@ final class AgentHub: ObservableObject {
 
     var onPermissionRequest: ((AgentSession) -> Void)?
     var onSessionIdle: ((AgentSession) -> Void)?
+    /// Fires when a turn completes (for completion-card auto-expand).
+    var onSessionCompleted: ((AgentSession) -> Void)?
 
     private let server: IPCServer
     private let transcripts = TranscriptWatcher()
     private var timeoutTasks: [String: Task<Void, Never>] = [:]
     private var pruneTimer: Timer?
+    private var persistTimer: Timer?
+    private var usageTimer: Timer?
+    private var persistDirty = false
 
     var sessions: [AgentSession] { store.ordered }
 
@@ -41,10 +48,12 @@ final class AgentHub: ObservableObject {
                 self?.store.setLastAction(action, sessionId: sessionId)
             }
             self?.store.addTokens(update.tokens, sessionId: sessionId)
+            self?.markPersistDirty()
         }
     }
 
     func start() {
+        restoreSessionsFromDisk()
         do {
             try server.start()
         } catch IPCServer.StartError.anotherInstanceRunning {
@@ -58,6 +67,18 @@ final class AgentHub: ObservableObject {
         pruneTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { _ in
             Task { @MainActor [weak self] in
                 self?.pruneStaleSessions()
+            }
+        }
+        // Debounced disk snapshot for relaunch restore.
+        persistTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            Task { @MainActor [weak self] in
+                self?.flushPersistenceIfNeeded()
+            }
+        }
+        refreshClaudeUsage()
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
+            Task { @MainActor [weak self] in
+                self?.refreshClaudeUsage()
             }
         }
     }
@@ -100,6 +121,50 @@ final class AgentHub: ObservableObject {
         for sessionId in before.subtracting(Set(store.sessions.keys)) {
             transcripts.unwatch(sessionId: sessionId)
         }
+        if before != Set(store.sessions.keys) {
+            markPersistDirty()
+        }
+    }
+
+    private func restoreSessionsFromDisk() {
+        let restored = SessionPersistence.load()
+        guard !restored.isEmpty else { return }
+        // Drop anything whose agent/host is already gone.
+        let alive = restored.filter { session in
+            if let pid = session.agentProcessPid,
+               !TerminalFocus.isAgentProcessStillValid(pid: pid, agent: session.agent) {
+                return false
+            }
+            if let pid = session.terminalAppPid,
+               !TerminalFocus.isProcessAlive(pid) {
+                return false
+            }
+            return true
+        }
+        store.restore(alive)
+        for session in alive where session.agent == "claude-code" {
+            if let path = session.transcriptPath {
+                transcripts.watch(sessionId: session.id, path: path)
+            }
+        }
+    }
+
+    private func markPersistDirty() {
+        persistDirty = true
+    }
+
+    private func flushPersistenceIfNeeded() {
+        guard persistDirty else { return }
+        persistDirty = false
+        try? SessionPersistence.save(store.ordered)
+    }
+
+    func refreshClaudeUsage() {
+        guard Preferences.showAccountUsage else {
+            if claudeUsage != nil { claudeUsage = nil }
+            return
+        }
+        claudeUsage = ClaudeUsageLoader.load()
     }
 
     /// Cursor's bundle id is a todesktop hash and changes across builds; match
@@ -113,9 +178,13 @@ final class AgentHub: ObservableObject {
     }
 
     func stop() {
+        flushPersistenceIfNeeded()
+        try? SessionPersistence.save(store.ordered)
         server.stop()
         transcripts.stopAll()
         pruneTimer?.invalidate()
+        persistTimer?.invalidate()
+        usageTimer?.invalidate()
         for task in timeoutTasks.values { task.cancel() }
         timeoutTasks.removeAll()
     }
@@ -195,6 +264,7 @@ final class AgentHub: ObservableObject {
         if knownBefore.contains(sessionId), store.sessions[sessionId] == nil {
             transcripts.unwatch(sessionId: sessionId)
         }
+        markPersistDirty()
 
         switch envelope.event.kind {
         case .permissionRequest:
@@ -205,6 +275,7 @@ final class AgentHub: ObservableObject {
         case .stop:
             if let session = store.sessions[envelope.event.sessionId] {
                 onSessionIdle?(session)
+                onSessionCompleted?(session)
                 celebrate(sessionId: session.id)
             }
         default:

@@ -152,7 +152,7 @@ struct NotchView: View {
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
     private var expandedContent: some View {
-        SessionListView(hub: hub)
+        SessionListView(hub: hub, attention: state.attention)
             .padding(.top, 28)
             .padding(.horizontal, 12)
             .colorScheme(.dark)
@@ -228,31 +228,26 @@ struct NotchShape: Shape {
 /// the notch panel and the menu bar mode.
 struct SessionListView: View {
     @ObservedObject var hub: AgentHub
+    var attention: NotchAttention = .list
 
     private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
+    private var completionSession: AgentSession? {
+        guard case .completion(let id) = attention else { return nil }
+        return hub.sessions.first { $0.id == id }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Color.clear.frame(height: 6)
-            if !hub.sessions.isEmpty,
-               SessionMeta.tokens(totalTokens) != nil || SessionMeta.workTime(totalWork) != nil {
-                HStack(spacing: 5) {
-                    TokenIcon(size: 11)
-                    if let tokens = SessionMeta.tokens(totalTokens) {
-                        Text(tokens).foregroundStyle(Palette.green)
-                    }
-                    if let work = SessionMeta.workTime(totalWork) {
-                        if SessionMeta.tokens(totalTokens) != nil {
-                            Text("·").foregroundStyle(Palette.inkTertiary)
-                        }
-                        Text(work).foregroundStyle(Palette.inkSecondary)
-                    }
-                    Spacer()
-                }
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 10)
-                .padding(.bottom, 4)
+            if !hub.sessions.isEmpty || hub.claudeUsage != nil {
+                insightsHeader
+            }
+            if let done = completionSession {
+                CompletionCard(session: done)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .padding(.bottom, 4)
             }
             if hub.sessions.isEmpty {
                 VStack(spacing: 10) {
@@ -268,6 +263,9 @@ struct SessionListView: View {
                     if session.pending != nil {
                         PendingSessionCard(session: session, hub: hub)
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                    } else if case .completion(let id) = attention, session.id == id {
+                        // Featured as CompletionCard above; skip duplicate row.
+                        EmptyView()
                     } else {
                         SessionRow(
                             session: session,
@@ -284,6 +282,90 @@ struct SessionListView: View {
             }
             Color.clear.frame(height: 8)
         }
+        .animation(.spring(duration: 0.32, bounce: 0.1), value: attention)
+    }
+
+    @ViewBuilder
+    private var insightsHeader: some View {
+        let hasTokens = SessionMeta.tokens(totalTokens) != nil
+        let hasWork = SessionMeta.workTime(totalWork) != nil
+        let usage = Preferences.showAccountUsage ? hub.claudeUsage : nil
+        if hasTokens || hasWork || usage != nil {
+            HStack(spacing: 5) {
+                if hasTokens || hasWork {
+                    TokenIcon(size: 11)
+                    if let tokens = SessionMeta.tokens(totalTokens) {
+                        Text(tokens).foregroundStyle(Palette.green)
+                    }
+                    if let work = SessionMeta.workTime(totalWork) {
+                        if hasTokens {
+                            Text("·").foregroundStyle(Palette.inkTertiary)
+                        }
+                        Text(work).foregroundStyle(Palette.inkSecondary)
+                    }
+                }
+                if let usage, let five = usage.fiveHour {
+                    if hasTokens || hasWork {
+                        Text("·").foregroundStyle(Palette.inkTertiary)
+                    }
+                    Text("Cl \(five.roundedUsedPercentage)% 5h")
+                        .foregroundStyle(
+                            five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
+                        )
+                }
+                Spacer()
+            }
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .padding(.horizontal, 10)
+            .padding(.bottom, 4)
+        }
+    }
+}
+
+/// Featured "turn done" surface — Rocky celebrates; click jumps to terminal.
+struct CompletionCard: View {
+    let session: AgentSession
+
+    var body: some View {
+        HStack(spacing: 10) {
+            RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 28)
+                .pokeable()
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.projectName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                Text("Rocky says: done!")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Palette.green)
+                if let action = session.lastAction {
+                    Text(action)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.inkTertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Chip(text: SessionMeta.agentLabel(session))
+            if let terminal = SessionMeta.terminalLabel(session) {
+                Chip(text: terminal)
+            }
+        }
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Palette.green.opacity(0.35), lineWidth: 1)
+                )
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            RockyVoice.shared.tap()
+            TerminalFocus.focus(session: session)
+        }
+        .padding(.vertical, 3)
     }
 }
 
