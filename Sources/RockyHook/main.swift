@@ -96,10 +96,26 @@ if agent == "cursor",
       debugLog("agentPid unresolved for agent=\(agent)")
   }
 
+  // Terminal / pane hints for click-to-jump. Best-effort and fail-open —
+  // Warp SQLite lookup is bounded by sqlite busy timeout; never stalls the agent.
+  let env = ProcessInfo.processInfo.environment
+  let jump = TerminalProbe.jumpTarget(
+      environment: env,
+      cwd: event.cwd,
+      warpPaneResolver: { cwd in WarpSQLiteReader().lookupPaneUUID(forCwd: cwd) }
+  )
+  if let app = jump.terminalApp {
+      debugLog(
+          "jump app=\(app) tty=\(jump.terminalTTY ?? "-") "
+              + "warp=\(jump.warpPaneUUID ?? "-") tmux=\(jump.tmuxTarget ?? "-")"
+      )
+  }
+
   let envelope = HookEnvelope(
       agent: agent,
       event: event,
-      agentProcessPid: agentPid
+      agentProcessPid: agentPid,
+      jumpTarget: jump
   )
 
 guard let line = try? NDJSON.encodeLine(envelope) else {

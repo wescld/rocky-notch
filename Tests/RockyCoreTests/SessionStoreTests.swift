@@ -51,6 +51,33 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
     }
 
+    func testJumpTargetMergedFromEnvelope() {
+        var store = SessionStore()
+        let start = HookEnvelope(
+            requestId: "r1",
+            hookPid: 1,
+            agent: "claude-code",
+            event: HookEvent(sessionId: "s1", hookEventName: "SessionStart", cwd: "/tmp/proj"),
+            jumpTarget: JumpTarget(terminalApp: "Warp", terminalTTY: "/dev/ttys001")
+        )
+        store.apply(start, at: t0)
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.terminalApp, "Warp")
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.terminalTTY, "/dev/ttys001")
+
+        // Later event refines with Warp pane UUID without dropping earlier fields.
+        let refined = HookEnvelope(
+            requestId: "r2",
+            hookPid: 1,
+            agent: "claude-code",
+            event: HookEvent(sessionId: "s1", hookEventName: "UserPromptSubmit", cwd: "/tmp/proj"),
+            jumpTarget: JumpTarget(warpPaneUUID: "DEADBEEF")
+        )
+        store.apply(refined, at: t0 + 1)
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.terminalApp, "Warp")
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.terminalTTY, "/dev/ttys001")
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.warpPaneUUID, "DEADBEEF")
+    }
+
     func testLifecycle() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

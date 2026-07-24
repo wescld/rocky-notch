@@ -14,13 +14,16 @@ final class IPCTests: XCTestCase {
                 toolName: "Bash",
                 toolInput: .object(["command": .string("ls")])
             ),
-            agentProcessPid: 12345
+            agentProcessPid: 12345,
+            jumpTarget: JumpTarget(terminalApp: "Warp", warpPaneUUID: "ABC")
         )
         let line = try NDJSON.encodeLine(envelope)
         XCTAssertEqual(line.last, 0x0A)
         let decoded = try NDJSON.decode(HookEnvelope.self, from: line.dropLast())
         XCTAssertEqual(decoded, envelope)
         XCTAssertEqual(decoded.agentProcessPid, 12345)
+        XCTAssertEqual(decoded.jumpTarget?.terminalApp, "Warp")
+        XCTAssertEqual(decoded.jumpTarget?.warpPaneUUID, "ABC")
     }
 
     func testEnvelopeDecodesWithoutAgentProcessPid() throws {
@@ -30,6 +33,7 @@ final class IPCTests: XCTestCase {
         """
         let decoded = try NDJSON.decode(HookEnvelope.self, from: Data(json.utf8))
         XCTAssertNil(decoded.agentProcessPid)
+        XCTAssertNil(decoded.jumpTarget)
         XCTAssertEqual(decoded.agent, "codex")
         XCTAssertEqual(decoded.hookPid, 9)
     }
