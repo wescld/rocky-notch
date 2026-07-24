@@ -43,7 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .menuBar:
             notchController?.setVisible(false)
             if menuBarPanel == nil {
-                menuBarPanel = MenuBarPanelController(hub: hub)
+                menuBarPanel = MenuBarPanelController(hub: hub) { [weak self] in
+                    self?.menuBarPanel?.hide()
+                    self?.openSettings()
+                }
             }
         }
     }
@@ -105,14 +108,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func statusItemClicked() {
-        let isRightClick = NSApp.currentEvent?.type == .rightMouseUp
+        let event = NSApp.currentEvent
+        // Control-click is reported as leftMouseUp + .control, not rightMouseUp.
+        let isRightClick =
+            event?.type == .rightMouseUp
+            || (event?.type == .leftMouseUp && event?.modifierFlags.contains(.control) == true)
         if Preferences.displayMode == .menuBar, !isRightClick {
             menuBarPanel?.toggle(relativeTo: statusItem?.button)
             return
         }
         menuBarPanel?.hide()
+        // Assign menu only for this open. Clearing it immediately after
+        // performClick races the menu presentation and often shows nothing —
+        // clear in menuDidClose instead.
         statusItem?.menu = statusMenu
         statusItem?.button?.performClick(nil)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Hand clicks back to statusItemClicked (left = console in menu-bar mode).
         statusItem?.menu = nil
     }
 

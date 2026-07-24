@@ -15,7 +15,7 @@ final class MenuBarPanelController {
 
     private(set) var isShown = false
 
-    init(hub: AgentHub) {
+    init(hub: AgentHub, onOpenSettings: @escaping () -> Void = {}) {
         self.hub = hub
         let panel = NSPanel(
             contentRect: .zero,
@@ -32,7 +32,9 @@ final class MenuBarPanelController {
         panel.hidesOnDeactivate = false
         self.panel = panel
 
-        let hosting = NSHostingView(rootView: MenuBarCard(hub: hub))
+        let hosting = NSHostingView(
+            rootView: MenuBarCard(hub: hub, onOpenSettings: onOpenSettings)
+        )
         self.hosting = hosting
         panel.contentView = hosting
     }
@@ -93,31 +95,54 @@ final class MenuBarPanelController {
 /// The floating card: notch language (black, glass rim), menu bar posture.
 struct MenuBarCard: View {
     @ObservedObject var hub: AgentHub
+    var onOpenSettings: () -> Void = {}
 
     var body: some View {
-        SessionListView(hub: hub)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(width: 430)
-            .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(.black)
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                stops: [
-                                    .init(color: .white.opacity(0.22), location: 0),
-                                    .init(color: .white.opacity(0.12), location: 0.5),
-                                    .init(color: .white.opacity(0.30), location: 1),
-                                ],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ),
-                            lineWidth: 1
-                        )
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Rocky")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.inkSecondary)
+                Spacer(minLength: 8)
+                Button(action: onOpenSettings) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
-            )
-            .colorScheme(.dark)
+                .buttonStyle(.plain)
+                .help("Settings")
+                .accessibilityLabel("Settings")
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+
+            SessionListView(hub: hub)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+        }
+        .frame(width: 430)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.black)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.22), location: 0),
+                                .init(color: .white.opacity(0.12), location: 0.5),
+                                .init(color: .white.opacity(0.30), location: 1),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1
+                    )
+            }
+        )
+        .colorScheme(.dark)
     }
 }
