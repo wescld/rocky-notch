@@ -169,12 +169,15 @@ final class AgentHub: ObservableObject {
             return
         }
         claudeUsage = ClaudeUsageLoader.load()
-        // Codex walks recent rollout files — keep it off the main thread.
+        // Codex walks recent rollout files — keep it off the main thread, then
+        // publish on MainActor so SwiftUI observes the chip.
         Task { [weak self] in
             let snap = await Task.detached(priority: .utility) {
                 CodexUsageLoader.load()
             }.value
-            self?.codexUsage = snap
+            await MainActor.run {
+                self?.codexUsage = snap
+            }
         }
     }
 

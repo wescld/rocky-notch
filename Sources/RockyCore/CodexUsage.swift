@@ -67,11 +67,12 @@ public enum CodexUsageLoader {
     }
 
     /// How far back to consider rollout files (seconds).
-    public static let defaultMaxAge: TimeInterval = 86_400
+    /// 7 days: account windows are weekly on Plus, and users may not run Codex daily.
+    public static let defaultMaxAge: TimeInterval = 7 * 86_400
     /// Cap on candidate files (newest first).
-    public static let defaultMaxFiles = 40
+    public static let defaultMaxFiles = 60
     /// Only scan the tail of large rollouts (bytes).
-    public static let defaultTailBytes: UInt64 = 512_000
+    public static let defaultTailBytes: UInt64 = 1_024_000
 
     /// Resolve `…/sessions` under a Codex home directory (`$CODEX_HOME`).
     public static func sessionsRoot(codexHome: URL) -> URL {

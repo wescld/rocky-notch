@@ -237,7 +237,8 @@ struct SettingsView: View {
             Section("Codex usage") {
                 Text(
                     "Reads the latest token_count.rate_limits from local "
-                        + "~/.codex/sessions/**/rollout-*.jsonl (no network, no install)."
+                        + "~/.codex/sessions/**/rollout-*.jsonl (no network, no install). "
+                        + "Plus plans often expose a 7-day window only (chip: Cd N% 7d)."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -251,13 +252,20 @@ struct SettingsView: View {
                             value: "\(window.roundedUsedPercentage)% used"
                         )
                     }
+                    if let source = usage.sourcePath {
+                        LabeledContent("Source", value: (source as NSString).lastPathComponent)
+                            .font(.caption)
+                    }
                     Button("Refresh") {
                         hub.refreshAccountUsage()
                     }
                 } else if showAccountUsage {
-                    Text("No recent Codex rate-limit data found. Run a Codex turn to seed local rollouts.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "No rate-limit lines found yet. Run any Codex turn (even a short one), "
+                            + "then Refresh. The chip also appears in the expanded notch header."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     Button("Refresh") {
                         hub.refreshAccountUsage()
                     }
