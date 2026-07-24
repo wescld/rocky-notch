@@ -220,8 +220,6 @@ struct NotchView: View {
         HStack(spacing: 0) {
             HStack(spacing: 9) {
                 rockyWing
-                countChip
-                    .matchedGeometryEffect(id: "count", in: capNamespace)
                 // Sheds the work time, then the tokens, on narrower notches.
                 ViewThatFits(in: .horizontal) {
                     capStats(includeWork: true)
@@ -235,14 +233,20 @@ struct NotchView: View {
 
             Spacer(minLength: 0)
 
-            // Account limits sit on the right, in the strip the notch does not
-            // cover. The middle is deliberately left empty.
-            ViewThatFits(in: .horizontal) {
-                capUsage(compact: false)
-                capUsage(compact: true)
-                EmptyView()
+            // Account limits and the count share the right strip; the count
+            // keeps the wing it holds at rest, so it never travels on opening.
+            // The middle is deliberately left empty — the cutout covers it.
+            HStack(spacing: 9) {
+                ViewThatFits(in: .horizontal) {
+                    capUsage(compact: false)
+                    capUsage(compact: true)
+                    EmptyView()
+                }
+                .transition(.opacity)
+                countChip
+                    .matchedGeometryEffect(id: "count", in: capNamespace)
             }
-            .transition(.opacity)
+            .fixedSize()
             .padding(.trailing, capInset)
             .frame(width: sideWidth + capInset, alignment: .trailing)
         }
