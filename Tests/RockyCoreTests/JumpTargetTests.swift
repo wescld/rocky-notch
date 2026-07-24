@@ -4,7 +4,7 @@ import XCTest
 final class JumpTargetTests: XCTestCase {
     func testMergePrefersNonNilFromOther() {
         let base = JumpTarget(terminalApp: "Warp", terminalTTY: "/dev/ttys001")
-        let other = JumpTarget(warpPaneUUID: "ABC", workingDirectory: "/tmp/x")
+        let other = JumpTarget(workingDirectory: "/tmp/x", warpPaneUUID: "ABC")
         let merged = base.merging(other)
         XCTAssertEqual(merged.terminalApp, "Warp")
         XCTAssertEqual(merged.terminalTTY, "/dev/ttys001")
@@ -14,7 +14,7 @@ final class JumpTargetTests: XCTestCase {
 
     func testMergeDoesNotClobberWithNil() {
         let base = JumpTarget(terminalApp: "Warp", warpPaneUUID: "OLD")
-        let other = JumpTarget(terminalApp: nil, warpPaneUUID: nil, terminalTTY: "/dev/ttys002")
+        let other = JumpTarget(terminalApp: nil, terminalTTY: "/dev/ttys002", warpPaneUUID: nil)
         let merged = base.merging(other)
         XCTAssertEqual(merged.terminalApp, "Warp")
         XCTAssertEqual(merged.warpPaneUUID, "OLD")
