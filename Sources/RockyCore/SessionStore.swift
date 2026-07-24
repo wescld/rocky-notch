@@ -257,9 +257,15 @@ public struct SessionStore: Equatable, Sendable {
             // Pending permission: keep until decided or dead-host prune.
             if session.pending != nil { return true }
             let age = now.timeIntervalSince(session.lastEventAt)
-            // Turn finished (Stop) — short click-to-jump window.
+            // Turn finished (Stop) — short click-to-jump window when we still
+            // know the host/agent. Pure observational rows (JSONL discovery /
+            // no PIDs) keep the longer orphan window so launch-seeded sessions
+            // aren't dropped on the first prune tick.
             if session.status == .idle {
-                return age < idleRetentionTimeout
+                if session.agentProcessPid != nil || session.terminalAppPid != nil {
+                    return age < idleRetentionTimeout
+                }
+                return age < orphanTimeout
             }
             // "Your turn in the terminal" — user walked away / session closed.
             if session.status == .waitingInput {
