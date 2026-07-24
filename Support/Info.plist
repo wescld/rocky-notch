@@ -26,5 +26,15 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle 2: appcast hosted as a release asset (see docs/releasing.md). -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/wescld/rocky-notch/releases/latest/download/appcast.xml</string>
+	<!-- Public Ed25519 key from `make sparkle-keys` / generate_keys. CI can
+	     overwrite this via SPARKLE_PUBLIC_ED_KEY. Leave empty until you have keys. -->
+	<key>SUPublicEDKey</key>
+	<string></string>
+	<!-- First launch stays quiet; Sparkle asks on the second launch by default. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

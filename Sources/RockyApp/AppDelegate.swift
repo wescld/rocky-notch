@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         wireAlerts()
         setUpStatusItem()
         applyDisplayMode()
+        UpdateChecker.shared.start()
         defaultsObserver = NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .receive(on: DispatchQueue.main)
@@ -141,6 +142,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+        if UpdateChecker.shared.isAvailable {
+            let updatesItem = NSMenuItem(
+                title: "Check for Updates…",
+                action: #selector(checkForUpdates),
+                keyEquivalent: ""
+            )
+            updatesItem.target = self
+            menu.addItem(updatesItem)
+        }
         let settingsItem = NSMenuItem(
             title: "Settings…",
             action: #selector(openSettings),
@@ -153,6 +163,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         )
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        UpdateChecker.shared.checkForUpdates(sender)
     }
 
     @objc private func openSettings() {
