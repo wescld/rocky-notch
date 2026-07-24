@@ -437,28 +437,11 @@ extension AgentIntegration {
     /// Build a health report for Settings diagnostics (nil if agent absent).
     func healthReport() -> HookHealthReport? {
         guard isAgentPresent else { return nil }
-        if let pluginBackend {
-            var issues: [HookHealthReport.Issue] = []
-            let path = AgentIntegration.hookBinaryPath
-            if !FileManager.default.fileExists(atPath: path) {
-                issues.append(.binaryNotFound(path: path))
-            } else if !FileManager.default.isExecutableFile(atPath: path) {
-                issues.append(.binaryNotExecutable(path: path))
-            }
-            if !pluginBackend.isInstalled {
-                issues.append(.notInstalled)
-            } else if !pluginBackend.isCurrent {
-                issues.append(
-                    .staleCommandPath(recorded: "(plugin)", expected: path)
-                )
-            }
-            return HookHealthReport(
-                agent: "kimi-code",
-                displayName: displayName,
-                issues: issues,
-                expectedBinaryPath: path,
-                configPath: nil
-            )
+        // Kimi / OpenCode install a plugin (JS or registry), not a JSON hooks
+        // file. Reuse the same binary + installed/current checks; never try to
+        // JSON-parse the plugin path (that produced a false "not valid JSON").
+        if pluginBackend != nil || openCodeBackend != nil {
+            return pluginStyleHealthReport()
         }
         let data = try? Data(contentsOf: configURL)
         return HookHealthCheck.inspectNested(
@@ -467,6 +450,44 @@ extension AgentIntegration {
             expectedBinaryPath: AgentIntegration.hookBinaryPath,
             configPath: configURL.path,
             configData: data
+        )
+    }
+
+    /// Health for agents that install via a dedicated plugin backend
+    /// (`pluginBackend` for Kimi, `openCodeBackend` for OpenCode).
+    private func pluginStyleHealthReport() -> HookHealthReport {
+        var issues: [HookHealthReport.Issue] = []
+        let path = AgentIntegration.hookBinaryPath
+        if !FileManager.default.fileExists(atPath: path) {
+            issues.append(.binaryNotFound(path: path))
+        } else if !FileManager.default.isExecutableFile(atPath: path) {
+            issues.append(.binaryNotExecutable(path: path))
+        }
+        let installed: Bool
+        let current: Bool
+        if let pluginBackend {
+            installed = pluginBackend.isInstalled
+            current = pluginBackend.isCurrent
+        } else if let openCodeBackend {
+            installed = openCodeBackend.isInstalled
+            current = openCodeBackend.isCurrent
+        } else {
+            installed = false
+            current = false
+        }
+        if !installed {
+            issues.append(.notInstalled)
+        } else if !current {
+            issues.append(
+                .staleCommandPath(recorded: "(plugin)", expected: path)
+            )
+        }
+        return HookHealthReport(
+            agent: displayName.lowercased(),
+            displayName: displayName,
+            issues: issues,
+            expectedBinaryPath: path,
+            configPath: openCodeBackend.map { $0.pluginURL.path }
         )
     }
 }
