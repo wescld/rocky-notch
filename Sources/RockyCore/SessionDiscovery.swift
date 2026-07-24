@@ -132,6 +132,8 @@ public enum SessionDiscovery {
         task: String? = nil,
         lastAction: String? = nil
     ) -> AgentSession {
+        // Normalize /var ↔ /private/var firmlinks so store + tests agree.
+        let standardizedPath = (transcriptPath as NSString).standardizingPath
         var session = AgentSession(
             id: id,
             agent: agent,
@@ -143,7 +145,7 @@ public enum SessionDiscovery {
             title: nil,
             model: model,
             terminalAppPid: nil,
-            transcriptPath: transcriptPath,
+            transcriptPath: standardizedPath,
             lastAction: lastAction
         )
         session.jumpTarget = JumpTarget(workingDirectory: cwd)

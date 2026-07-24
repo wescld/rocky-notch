@@ -43,7 +43,11 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(s.status, .idle)
         XCTAssertNil(s.pending)
         XCTAssertEqual(s.model, "claude-sonnet-4-5")
-        XCTAssertEqual(s.transcriptPath, transcript.path)
+        // Enumerator may resolve /var → /private/var (macOS firmlink); compare standardized.
+        XCTAssertEqual(
+            s.transcriptPath.map { ($0 as NSString).standardizingPath },
+            (transcript.path as NSString).standardizingPath
+        )
         XCTAssertEqual(s.task, "Fix the flaky auth tests.")
         XCTAssertEqual(s.lastAction, "running npm test")
         XCTAssertEqual(s.jumpTarget?.workingDirectory, "/tmp/demo-repo")
