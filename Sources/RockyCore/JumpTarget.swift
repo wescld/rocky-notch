@@ -16,7 +16,9 @@ public struct JumpTarget: Codable, Equatable, Sendable {
     /// `session:window.pane` for tmux (`$TMUX_PANE` resolved).
     public var tmuxTarget: String?
     public var tmuxSocketPath: String?
-    /// Warp leaf pane UUID (uppercase hex, no separators) from Warp's SQLite.
+    /// Warp session / leaf pane UUID (hex, no separators). Sourced from
+    /// `WARP_TERMINAL_SESSION_UUID` / `WARP_FOCUS_URL` when available, else
+    /// from Warp's SQLite `terminal_panes.uuid`. Used with `warp://session/<uuid>`.
     public var warpPaneUUID: String?
 
     public init(

@@ -86,13 +86,70 @@ final class TerminalProbeTests: XCTestCase {
             currentTTY: { "/dev/ttys009" },
             warpPaneResolver: { cwd in
                 XCTAssertEqual(cwd, "/tmp/proj")
-                return "PANEUUID"
+                return "aabbccddeeff00112233445566778899"
             }
         )
         XCTAssertEqual(target.terminalApp, "Warp")
         XCTAssertEqual(target.workingDirectory, "/tmp/proj")
         XCTAssertEqual(target.terminalTTY, "/dev/ttys009")
-        XCTAssertEqual(target.warpPaneUUID, "PANEUUID")
+        XCTAssertEqual(target.warpPaneUUID, "aabbccddeeff00112233445566778899")
+    }
+
+    func testJumpTargetPrefersWarpSessionEnvOverSQLite() {
+        let env = [
+            "TERM_PROGRAM": "WarpTerminal",
+            "WARP_TERMINAL_SESSION_UUID": "31e4ddb3c9fc41109f3e8e18e2125685",
+        ]
+        var resolverCalled = false
+        let target = TerminalProbe.jumpTarget(
+            environment: env,
+            cwd: "/tmp/proj",
+            currentTTY: { nil },
+            warpPaneResolver: { _ in
+                resolverCalled = true
+                return "deadbeefdeadbeefdeadbeefdeadbeef"
+            }
+        )
+        XCTAssertEqual(target.warpPaneUUID, "31e4ddb3c9fc41109f3e8e18e2125685")
+        XCTAssertFalse(resolverCalled, "env UUID should short-circuit SQLite lookup")
+    }
+
+    func testJumpTargetParsesWarpFocusURL() {
+        let env = [
+            "TERM_PROGRAM": "WarpTerminal",
+            "WARP_FOCUS_URL": "warp://session/f60d5dfa5a5e4102bede001061a83aac",
+        ]
+        let target = TerminalProbe.jumpTarget(
+            environment: env,
+            cwd: "/tmp/proj",
+            currentTTY: { nil },
+            warpPaneResolver: { _ in nil }
+        )
+        XCTAssertEqual(target.warpPaneUUID, "f60d5dfa5a5e4102bede001061a83aac")
+    }
+
+    func testWarpFocusURLParsing() {
+        XCTAssertEqual(
+            TerminalProbe.parseWarpFocusURL("warp://session/31e4ddb3c9fc41109f3e8e18e2125685"),
+            "31e4ddb3c9fc41109f3e8e18e2125685"
+        )
+        XCTAssertEqual(
+            TerminalProbe.parseWarpFocusURL("warp://session/31E4DDB3-C9FC-4110-9F3E-8E18E2125685"),
+            "31e4ddb3c9fc41109f3e8e18e2125685"
+        )
+        XCTAssertNil(TerminalProbe.parseWarpFocusURL("https://example.com/session/x"))
+        XCTAssertNil(TerminalProbe.normalizeWarpSessionUUID("not-a-uuid"))
+        XCTAssertNil(TerminalProbe.normalizeWarpSessionUUID("gggggggggggggggggggggggggggggggg"))
+    }
+
+    func testJumpTargetIgnoresGenericDevTty() {
+        let target = TerminalProbe.jumpTarget(
+            environment: ["TERM_PROGRAM": "WarpTerminal"],
+            cwd: nil,
+            currentTTY: { "/dev/tty" },
+            warpPaneResolver: { _ in nil }
+        )
+        XCTAssertNil(target.terminalTTY)
     }
 
     func testJumpTargetSkipsWarpResolverForOtherTerminals() {

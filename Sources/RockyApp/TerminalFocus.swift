@@ -51,7 +51,19 @@ enum TerminalFocus {
 
     /// Synchronous jump for tests / callers that already own a background queue.
     static func focusSync(session: AgentSession) {
-        if let target = session.jumpTarget {
+        var target = session.jumpTarget
+        // Sessions captured before we read WARP_TERMINAL_SESSION_UUID still
+        // lack warpPaneUUID. Re-probe the live agent process env when possible.
+        if target?.terminalApp == "Warp" || target == nil,
+           normalizedWarpUUID(target?.warpPaneUUID) == nil,
+           let liveUUID = warpUUIDFromLiveAgent(session: session) {
+            var refined = target ?? JumpTarget(terminalApp: "Warp")
+            refined.warpPaneUUID = liveUUID
+            if refined.terminalApp == nil { refined.terminalApp = "Warp" }
+            target = refined
+        }
+
+        if let target {
             // tmux: switch pane first, then focus the outer terminal.
             if let tmuxTarget = target.tmuxTarget, !tmuxTarget.isEmpty {
                 _ = selectTmuxPane(target: tmuxTarget, socketPath: target.tmuxSocketPath)
@@ -74,6 +86,50 @@ enum TerminalFocus {
             }
         }
         activateHost(session: session)
+    }
+
+    /// Read `WARP_TERMINAL_SESSION_UUID` from a still-running agent CLI.
+    private static func warpUUIDFromLiveAgent(session: AgentSession) -> String? {
+        guard let pid = session.agentProcessPid,
+              isAgentProcessStillValid(pid: pid, agent: session.agent)
+        else { return nil }
+        if let raw = processEnvironmentValue(pid: pid, key: "WARP_TERMINAL_SESSION_UUID") {
+            return TerminalProbe.normalizeWarpSessionUUID(raw)
+        }
+        if let url = processEnvironmentValue(pid: pid, key: "WARP_FOCUS_URL") {
+            return TerminalProbe.parseWarpFocusURL(url)
+        }
+        return nil
+    }
+
+    /// Best-effort `KEY=value` lookup from another process's environment.
+    private static func processEnvironmentValue(pid: Int32, key: String) -> String? {
+        // `ps eww` dumps the env of same-user processes without entitlements.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["eww", "-p", "\(pid)"]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        // ps eww: one long line of space-separated KEY=value tokens.
+        let prefix = key + "="
+        for token in text.split(whereSeparator: { $0 == " " || $0 == "\n" }) {
+            let s = String(token)
+            if s.hasPrefix(prefix) {
+                let value = String(s.dropFirst(prefix.count))
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
     }
 
     // MARK: - Host activate (baseline)
@@ -109,9 +165,20 @@ enum TerminalFocus {
     private static let warpTabCycleSettleDelay: TimeInterval = 0.1
 
     private static func jumpToWarp(_ target: JumpTarget) {
+        // Best path: Warp's own deep link focuses the exact session/tab.
+        // This does not need Accessibility and works even when SQLite
+        // `terminal_panes` is empty (current Warp Stable).
+        if let uuid = normalizedWarpUUID(target.warpPaneUUID) {
+            if run("/usr/bin/open", ["warp://session/\(uuid)"]) {
+                return
+            }
+        }
+
+        // No session UUID (or open failed) — activate Warp, then try the
+        // legacy Accessibility tab-cycle if we still have a locator.
         _ = run("/usr/bin/open", ["-b", "dev.warp.Warp-Stable"])
 
-        guard let targetPaneUUID = target.warpPaneUUID, !targetPaneUUID.isEmpty else {
+        guard let targetPaneUUID = normalizedWarpUUID(target.warpPaneUUID) else {
             return
         }
 
@@ -122,20 +189,30 @@ enum TerminalFocus {
             Thread.sleep(forTimeInterval: warpFrontmostPollInterval)
         }
 
-        if reader.currentFocusedPaneUUID() == targetPaneUUID {
+        let targetUpper = targetPaneUUID.uppercased()
+        if reader.currentFocusedPaneUUID()?.uppercased() == targetUpper {
             return
         }
 
         let tabCount = max(1, reader.tabCountInActiveWindow())
+        // If SQLite has no tabs, cycling is hopeless — stay on activated Warp.
+        guard tabCount > 0 else { return }
+
         let maxAttempts = tabCount + 2
         for _ in 0..<maxAttempts {
             advanceWarpTab()
             Thread.sleep(forTimeInterval: warpTabCycleSettleDelay)
-            if reader.currentFocusedPaneUUID() == targetPaneUUID {
+            if reader.currentFocusedPaneUUID()?.uppercased() == targetUpper {
                 return
             }
         }
         // Cycle failed — Warp is at least activated.
+    }
+
+    /// Lowercase 32-hex form accepted by `warp://session/<uuid>`.
+    private static func normalizedWarpUUID(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        return TerminalProbe.normalizeWarpSessionUUID(raw)
     }
 
     private static func isWarpFrontmost() -> Bool {

@@ -51,14 +51,72 @@ public enum TerminalProbe {
         }
 
         if target.terminalTTY == nil {
-            target.terminalTTY = currentTTY()
+            // ctermid can return the generic "/dev/tty", which is not a real
+            // device path and is useless for Terminal.app tab matching.
+            if let tty = currentTTY(), tty != "/dev/tty", tty.hasPrefix("/dev/") {
+                target.terminalTTY = tty
+            }
         }
 
-        if terminalApp == "Warp", let cwd, !cwd.isEmpty {
-            target.warpPaneUUID = warpPaneResolver(cwd)
+        if terminalApp == "Warp" {
+            // Prefer the live session UUID Warp injects into every shell
+            // (`WARP_TERMINAL_SESSION_UUID` / `WARP_FOCUS_URL`). Newer Warp
+            // builds leave `terminal_panes` empty in SQLite, so the cwd→pane
+            // lookup often returns nil — the env var is the reliable path.
+            target.warpPaneUUID =
+                Self.warpSessionUUID(from: environment)
+                ?? {
+                    guard let cwd, !cwd.isEmpty else { return nil }
+                    return warpPaneResolver(cwd)
+                }()
         }
 
         return target
+    }
+
+    /// Warp session UUID used by `warp://session/<uuid>` deep links.
+    /// Accepts bare `WARP_TERMINAL_SESSION_UUID` or parses `WARP_FOCUS_URL`.
+    public static func warpSessionUUID(from environment: [String: String]) -> String? {
+        if let raw = emptyToNil(environment["WARP_TERMINAL_SESSION_UUID"]) {
+            return normalizeWarpSessionUUID(raw)
+        }
+        if let url = emptyToNil(environment["WARP_FOCUS_URL"]),
+           let uuid = parseWarpFocusURL(url) {
+            return uuid
+        }
+        return nil
+    }
+
+    /// `warp://session/<uuid>` → uuid (hex, no separators).
+    public static func parseWarpFocusURL(_ url: String) -> String? {
+        // Expected: warp://session/<32-hex>  (optionally with dashes)
+        guard let schemeRange = url.range(of: "://") else { return nil }
+        let rest = url[schemeRange.upperBound...]
+        let parts = rest.split(separator: "/", maxSplits: 2, omittingEmptySubsequences: true)
+        // parts[0] = "session", parts[1] = uuid  (host may be "session" when no authority)
+        if parts.count >= 2, parts[0].lowercased() == "session" {
+            return normalizeWarpSessionUUID(String(parts[1]))
+        }
+        // Alternate: warp://session/UUID parsed with URLComponents host+path
+        if let components = URLComponents(string: url),
+           components.host?.lowercased() == "session" {
+            let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return normalizeWarpSessionUUID(path)
+        }
+        return nil
+    }
+
+    public static func normalizeWarpSessionUUID(_ raw: String) -> String? {
+        let cleaned = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        guard cleaned.count == 32,
+              cleaned.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789abcdef").contains($0) })
+        else {
+            return nil
+        }
+        return cleaned
     }
 
     // MARK: - Terminal inference
