@@ -310,6 +310,33 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(SessionStore.displayAgentMessage(from: nil))
     }
 
+    /// Agents write markdown for a rendered terminal; in a one-line chip the
+    /// syntax is pure noise.
+    func testDisplayAgentMessageStripsMarkdownNoise() {
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "**No projeto atual, qual te trava?**"),
+            "No projeto atual, qual te trava?"
+        )
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "- Did not verify `web-app` consumption"),
+            "Did not verify web-app consumption"
+        )
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "10. Run the __shadow__ check"),
+            "Run the shadow check"
+        )
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "See [the docs](https://example.com/x) first"),
+            "See the docs first"
+        )
+        // Identifiers and arithmetic must survive: unwrapping single
+        // delimiters would mangle them.
+        XCTAssertEqual(
+            SessionStore.displayAgentMessage(from: "Renamed some_var and set n = 2 * 3"),
+            "Renamed some_var and set n = 2 * 3"
+        )
+    }
+
     /// The notch row truncates again on width, so the preview must read from
     /// its start — anchoring at the end leaves the reader with the middle of a
     /// sentence once both cuts apply.

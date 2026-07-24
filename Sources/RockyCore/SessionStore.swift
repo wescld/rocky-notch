@@ -475,10 +475,39 @@ public struct SessionStore: Equatable, Sendable {
             .filter { !$0.isEmpty && !isMarkdownScaffolding($0) }
         // Fall back to the whole text when it is nothing but scaffolding.
         let tail = lines.last ?? raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let flat = tail
+        let flat = stripMarkdown(tail)
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
         return flat.isEmpty ? nil : flat
+    }
+
+    /// Strips the markdown agents write for a rendered terminal but which is
+    /// noise in a one-line chip — `**Want me to commit?**` should read as the
+    /// question, not as asterisks.
+    ///
+    /// Single `*` and `_` are deliberately left alone: they collide with
+    /// `snake_case` identifiers and arithmetic, and mangling a variable name is
+    /// worse than showing one stray character.
+    private static func stripMarkdown(_ line: String) -> String {
+        var text = line.replacingOccurrences(
+            // Leading bullet, ordered marker, quote or heading.
+            of: "^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+|>\\s*|#{1,6}\\s+)",
+            with: "",
+            options: .regularExpression
+        )
+        // [label](url) → label
+        text = text.replacingOccurrences(
+            of: "\\[([^\\]]*)\\]\\([^)]*\\)",
+            with: "$1",
+            options: .regularExpression
+        )
+        // Paired emphasis only, so the delimiters are unambiguous.
+        for pattern in ["\\*\\*([^*]+)\\*\\*", "__([^_]+)__", "`([^`]+)`"] {
+            text = text.replacingOccurrences(
+                of: pattern, with: "$1", options: .regularExpression
+            )
+        }
+        return text
     }
 
     /// Whether the agent's closing line carries a question mark.
