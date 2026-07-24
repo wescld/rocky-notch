@@ -115,15 +115,15 @@ struct MenuBarCard: View {
                 .help("Settings")
                 .accessibilityLabel("Settings")
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 18)
             .padding(.top, 10)
             .padding(.bottom, 2)
 
             SessionListView(hub: hub)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 18)
                 .padding(.bottom, 8)
         }
-        .frame(width: 430)
+        .frame(width: NotchView.expandedWidth)
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
