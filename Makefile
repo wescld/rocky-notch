@@ -20,6 +20,7 @@ app: build
 	mkdir -p $(APP)/Contents/Resources/Sounds $(APP)/Contents/Resources/Art $(APP)/Contents/Resources/Fonts
 	cp Support/Sounds/*.mp3 $(APP)/Contents/Resources/Sounds/
 	cp Support/Art/rocky/*.png $(APP)/Contents/Resources/Art/
+	cp Support/Art/logos/*.png $(APP)/Contents/Resources/Art/
 	cp Support/Art/rocky-idle/*.png $(APP)/Contents/Resources/Art/
 	cp Support/Art/rocky-dance/*.png $(APP)/Contents/Resources/Art/
 	cp Support/Art/rocky-walk/*.png $(APP)/Contents/Resources/Art/
