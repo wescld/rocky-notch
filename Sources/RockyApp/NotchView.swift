@@ -47,6 +47,16 @@ struct NotchView: View {
         hub.sessions.contains { $0.pending != nil }
     }
 
+    /// Something is blocked on the user: an approval card, or an agent that
+    /// told us it cannot proceed. The closed notch has to show this — otherwise
+    /// the user only learns about it by opening the notch, which is the very
+    /// terminal-hunting the app exists to end. Mirrors the menu bar icon rule.
+    private var needsAttention: Bool {
+        hub.sessions.contains {
+            $0.status == .waitingPermission || $0.status == .waitingInput
+        }
+    }
+
     private var anyRunning: Bool {
         hub.sessions.contains { $0.status == .running }
     }
@@ -104,7 +114,7 @@ struct NotchView: View {
     private var collapsedContent: some View {
         HStack {
             HStack(spacing: 9) {
-                if hasPending {
+                if needsAttention {
                     RockySprite(state: "rocky-alert", fallback: "south", size: 20)
                 } else if !hub.celebrating.isEmpty {
                     RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 22)
@@ -129,14 +139,14 @@ struct NotchView: View {
                 if !hub.sessions.isEmpty {
                     Text("\(hub.sessions.count)")
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(hasPending ? Color.black : Palette.inkSecondary)
+                        .foregroundStyle(needsAttention ? Color.black : Palette.inkSecondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(hasPending ? Palette.amber : Color.white.opacity(0.12))
+                                .fill(needsAttention ? Palette.amber : Color.white.opacity(0.12))
                         )
-                        .breathing(period: hasPending ? 1.0 : 100)
+                        .breathing(period: needsAttention ? 1.0 : 100)
                 }
             }
             .padding(.trailing, 18)
@@ -704,16 +714,36 @@ struct SessionRow: View {
 
     private var statusColor: Color { Palette.status(session.status) }
 
+    /// A finished turn whose closing line asked something. Drawn as a hollow
+    /// amber ring: same colour as the filled "waiting on you" dot, so scanning
+    /// the list stays one rule — amber means me — with the ring reading as the
+    /// lower intensity of that signal rather than a separate concept.
+    /// Hint only: see `SessionStore.asksSomething`.
+    private var showsQuestionHint: Bool {
+        session.status == .idle && session.handoffAsksSomething
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             if celebrating {
                 RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 24)
                     .transition(.scale.combined(with: .opacity))
             } else {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                    .shadow(color: statusColor.opacity(0.7), radius: 2)
+                Group {
+                    if showsQuestionHint {
+                        Circle()
+                            .strokeBorder(Palette.amber, lineWidth: 1.5)
+                            .frame(width: 8, height: 8)
+                    } else {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 7, height: 7)
+                    }
+                }
+                .shadow(
+                    color: (showsQuestionHint ? Palette.amber : statusColor).opacity(0.7),
+                    radius: 2
+                )
                 if session.status == .running {
                     RockyAnimatedSprite(size: 18)
                 }
@@ -723,14 +753,27 @@ struct SessionRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Palette.ink)
                     .lineLimit(1)
-                if session.status == .idle {
-                    Text("done · click to jump")
+                // The agent's closing words come first when the turn is over:
+                // "Want me to commit?" is what tells the user this session
+                // needs them, without opening the terminal to find out.
+                if session.status == .waitingInput, let message = session.lastAgentMessage {
+                    Text(message)
                         .font(.system(size: 10))
-                        .foregroundStyle(Palette.green)
+                        .foregroundStyle(Palette.amber)
+                        .lineLimit(1)
                 } else if session.status == .waitingInput {
                     Text("your turn in the terminal")
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.amber)
+                } else if session.status == .idle, let message = session.lastAgentMessage {
+                    Text(message)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .lineLimit(1)
+                } else if session.status == .idle {
+                    Text("done · click to jump")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.green)
                 } else if let action = session.lastAction {
                     ActionTicker(action: action)
                 } else if let task = session.task {

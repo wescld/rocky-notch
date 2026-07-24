@@ -24,6 +24,9 @@ final class AgentHub: ObservableObject {
     var onSessionIdle: ((AgentSession) -> Void)?
     /// Fires when a turn completes (for completion-card auto-expand).
     var onSessionCompleted: ((AgentSession) -> Void)?
+    /// An agent reported it cannot proceed without the user. Fires once, on the
+    /// transition, so a session that stays blocked doesn't nag.
+    var onWaitingInput: ((AgentSession) -> Void)?
 
     private let server: IPCServer
     private let transcripts = TranscriptWatcher()
@@ -90,8 +93,8 @@ final class AgentHub: ObservableObject {
     }
 
     /// Drop sessions that can no longer be interacted with:
-    /// 1. idle past `idleRetentionTimeout` (~5 min after Stop — click-to-jump)
-    /// 2. waitingInput past `waitingInputRetentionTimeout` (~10 min)
+    /// 1. idle past `idleRetentionTimeout`/`handoffRetentionTimeout` (~5-15 min after Stop — click-to-jump)
+    /// 2. waitingInput lives until the agent/host actually goes away (capped by (3) when untracked)
     /// 3. no agent PID past `untrackedAgentTimeout` (~15 min; not Cursor)
     /// 4. any status past `orphanTimeout` (2h) with no pending request
     /// 5. agent CLI process exited / PID reused (even if Warp/Cursor still up)
@@ -279,6 +282,7 @@ final class AgentHub: ObservableObject {
 
         let knownBefore = Set(store.sessions.keys)
         let pendingBefore = store.sessions[envelope.event.sessionId]?.pending?.requestId
+        let statusBefore = store.sessions[envelope.event.sessionId]?.status
         store.apply(envelope, at: Date())
         // A pending request the store just dropped (tool ran, turn stopped, or
         // a newer request replaced it) still has a hook blocked on the other
@@ -318,14 +322,24 @@ final class AgentHub: ObservableObject {
         }
         markPersistDirty()
 
+        let session = store.sessions[envelope.event.sessionId]
+        // A session that just reported it is blocked on the user gets the same
+        // treatment as a permission card: say so once, on the transition.
+        if let session, session.status == .waitingInput, statusBefore != .waitingInput {
+            onWaitingInput?(session)
+        }
+
         switch envelope.event.kind {
         case .permissionRequest:
             scheduleTimeout(requestId: envelope.requestId)
-            if let session = store.sessions[envelope.event.sessionId] {
+            if let session {
                 onPermissionRequest?(session)
             }
         case .stop:
-            if let session = store.sessions[envelope.event.sessionId] {
+            // Stop also ends a turn the agent finished blocked on the user.
+            // Only a genuinely finished turn is "done" — chiming completion at
+            // someone whose answer is still pending would be a lie.
+            if let session, session.status == .idle {
                 onSessionIdle?(session)
                 onSessionCompleted?(session)
                 celebrate(sessionId: session.id)
