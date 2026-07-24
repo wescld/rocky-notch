@@ -31,19 +31,24 @@ public struct HookEnvelope: Codable, Equatable, Sendable {
     /// which often failed and left `agentProcessPid` nil — sticky cards until
     /// the 2h orphan timeout. Optional for backward-compatible decode.
     public let agentProcessPid: Int32?
+    /// Terminal / pane hints captured from env + Warp SQLite while the hook
+    /// is still a child of the agent tree. Optional for older hooks.
+    public let jumpTarget: JumpTarget?
 
     public init(
         requestId: String = UUID().uuidString,
         hookPid: Int32 = ProcessInfo.processInfo.processIdentifier,
         agent: String = "claude-code",
         event: HookEvent,
-        agentProcessPid: Int32? = nil
+        agentProcessPid: Int32? = nil,
+        jumpTarget: JumpTarget? = nil
     ) {
         self.requestId = requestId
         self.hookPid = hookPid
         self.agent = agent
         self.event = event
         self.agentProcessPid = agentProcessPid
+        self.jumpTarget = jumpTarget
     }
 }
 

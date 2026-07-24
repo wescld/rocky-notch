@@ -47,6 +47,8 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// Used to drop the card when the user Ctrl+C's the agent while the
     /// terminal app (e.g. Warp) is still running.
     public var agentProcessPid: Int32? = nil
+    /// Precision jump metadata from the hook (Warp pane, TTY, tmux…).
+    public var jumpTarget: JumpTarget? = nil
     public var transcriptPath: String?
     /// Last meaningful action from the transcript ("Bash: npm test").
     public var lastAction: String?
@@ -139,6 +141,13 @@ public struct SessionStore: Equatable, Sendable {
         session.hookPid = envelope.hookPid
         if let cwd = event.cwd { session.cwd = cwd }
         if let path = event.transcriptPath { session.transcriptPath = path }
+        if let jump = envelope.jumpTarget {
+            session.jumpTarget = session.jumpTarget?.merging(jump) ?? jump
+            // Prefer cwd from the jump target when the event omitted it.
+            if session.cwd == nil, let wd = jump.workingDirectory {
+                session.cwd = wd
+            }
+        }
 
         switch event.kind {
         case .sessionStart:
@@ -199,6 +208,14 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func setAgentProcess(pid: Int32, sessionId: String) {
         sessions[sessionId]?.agentProcessPid = pid
+    }
+
+    public mutating func setJumpTarget(_ target: JumpTarget, sessionId: String) {
+        if let existing = sessions[sessionId]?.jumpTarget {
+            sessions[sessionId]?.jumpTarget = existing.merging(target)
+        } else {
+            sessions[sessionId]?.jumpTarget = target
+        }
     }
 
     public mutating func setLastAction(_ action: String, sessionId: String) {

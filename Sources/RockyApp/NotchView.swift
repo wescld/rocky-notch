@@ -568,6 +568,14 @@ enum SessionMeta {
     /// the agent chip — Cursor Agent hosted in Cursor would otherwise show
     /// "Cursor · Cursor".
     static func terminalLabel(_ session: AgentSession) -> String? {
+        // Prefer the name the hook classified (Warp / Ghostty / …) — more
+        // stable than the localized GUI name and works when PID is gone.
+        if let name = session.jumpTarget?.terminalApp, !name.isEmpty {
+            if name.caseInsensitiveCompare(agentLabel(session)) == .orderedSame {
+                return nil
+            }
+            return name
+        }
         guard let pid = session.terminalAppPid,
               let app = NSRunningApplication(processIdentifier: pid),
               let name = app.localizedName, !name.isEmpty
