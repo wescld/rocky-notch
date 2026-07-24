@@ -11,7 +11,9 @@ public struct JumpTarget: Codable, Equatable, Sendable {
     public var workingDirectory: String?
     /// e.g. `/dev/ttys012`
     public var terminalTTY: String?
-    /// Terminal-local session id when available (iTerm, Ghostty, cmux…).
+    /// Terminal-local session id when available (iTerm `ITERM_SESSION_ID`,
+    /// Ghostty surface UUID via AppleScript / optional env, cmux surface…).
+    /// For Ghostty this is only refreshed on SessionStart / UserPromptSubmit.
     public var terminalSessionID: String?
     /// `session:window.pane` for tmux (`$TMUX_PANE` resolved).
     public var tmuxTarget: String?

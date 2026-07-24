@@ -203,6 +203,152 @@ final class TerminalProbeTests: XCTestCase {
         XCTAssertEqual(target.terminalApp, "iTerm")
         XCTAssertEqual(target.terminalSessionID, "w0t1p2:ABCDEF")
     }
+
+    // MARK: - Ghostty
+
+    func testInferGhosttyFromResourcesDirFallback() {
+        let env = [
+            "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+            "GHOSTTY_BIN_DIR": "/Applications/Ghostty.app/Contents/MacOS",
+        ]
+        XCTAssertEqual(TerminalProbe.inferTerminalApp(from: env), "Ghostty")
+    }
+
+    func testGhosttySurfaceIDFromEnvKeys() {
+        let env = [
+            "TERM_PROGRAM": "ghostty",
+            "GHOSTTY_SURFACE_ID": "A0BED0CC-C017-42CD-9CAD-030392F4B017",
+            "GHOSTTY_RESOURCES_DIR": "/Applications/Ghostty.app/Contents/Resources/ghostty",
+        ]
+        XCTAssertEqual(
+            TerminalProbe.ghosttySurfaceID(from: env),
+            "A0BED0CC-C017-42CD-9CAD-030392F4B017"
+        )
+
+        // Prefer GHOSTTY_SURFACE_ID over weaker aliases.
+        let multi = [
+            "TERM_PROGRAM": "ghostty",
+            "GHOSTTY_SURFACE_ID": "surface-primary",
+            "GHOSTTY_TERMINAL_ID": "terminal-secondary",
+            "TERM_SESSION_ID": "term-session",
+        ]
+        XCTAssertEqual(TerminalProbe.ghosttySurfaceID(from: multi), "surface-primary")
+
+        // TERM_SESSION_ID only when Ghostty identity is clear.
+        let termSessionOnly = [
+            "TERM_PROGRAM": "ghostty",
+            "TERM_SESSION_ID": "w0t0p0:UUID",
+        ]
+        XCTAssertEqual(TerminalProbe.ghosttySurfaceID(from: termSessionOnly), "w0t0p0:UUID")
+        XCTAssertNil(TerminalProbe.ghosttySurfaceID(from: ["TERM_SESSION_ID": "other"]))
+    }
+
+    func testGhosttyJumpTargetCapturesSurfaceOnSafeEvents() {
+        let env = [
+            "TERM_PROGRAM": "ghostty",
+            "GHOSTTY_SURFACE_ID": "surface-from-env",
+        ]
+        let start = TerminalProbe.jumpTarget(
+            environment: env,
+            cwd: "/tmp/proj",
+            hookEventName: "SessionStart",
+            currentTTY: { nil },
+            warpPaneResolver: { _ in nil },
+            ghosttySurfaceResolver: { "should-not-run-when-env-set" }
+        )
+        XCTAssertEqual(start.terminalApp, "Ghostty")
+        XCTAssertEqual(start.terminalSessionID, "surface-from-env")
+        XCTAssertEqual(start.workingDirectory, "/tmp/proj")
+
+        var resolverCalls = 0
+        let prompt = TerminalProbe.jumpTarget(
+            environment: ["TERM_PROGRAM": "ghostty"],
+            cwd: "/tmp/proj",
+            hookEventName: "UserPromptSubmit",
+            currentTTY: { nil },
+            warpPaneResolver: { _ in nil },
+            ghosttySurfaceResolver: {
+                resolverCalls += 1
+                return "surface-from-applescript"
+            }
+        )
+        XCTAssertEqual(prompt.terminalSessionID, "surface-from-applescript")
+        XCTAssertEqual(resolverCalls, 1)
+
+        // Cursor-style alias for the same user-submit moment.
+        let beforeSubmit = TerminalProbe.jumpTarget(
+            environment: ["TERM_PROGRAM": "ghostty"],
+            cwd: nil,
+            hookEventName: "BeforeSubmitPrompt",
+            currentTTY: { nil },
+            ghosttySurfaceResolver: { "surface-cursor" }
+        )
+        XCTAssertEqual(beforeSubmit.terminalSessionID, "surface-cursor")
+    }
+
+    func testGhosttyJumpTargetSkipsSurfaceOnUnsafeEvents() {
+        var resolverCalls = 0
+        let env = [
+            "TERM_PROGRAM": "ghostty",
+            "GHOSTTY_SURFACE_ID": "would-be-wrong-after-tab-switch",
+        ]
+        for event in ["PreToolUse", "PostToolUse", "Stop", "Notification", "PermissionRequest"] {
+            resolverCalls = 0
+            let target = TerminalProbe.jumpTarget(
+                environment: env,
+                cwd: "/tmp/proj",
+                hookEventName: event,
+                currentTTY: { "/dev/ttys009" },
+                warpPaneResolver: { _ in nil },
+                ghosttySurfaceResolver: {
+                    resolverCalls += 1
+                    return "focused-other-tab"
+                }
+            )
+            XCTAssertEqual(target.terminalApp, "Ghostty", event)
+            XCTAssertNil(target.terminalSessionID, "must not stamp surface on \(event)")
+            XCTAssertEqual(resolverCalls, 0, "resolver must not run on \(event)")
+            // Still capture non-surface fields.
+            XCTAssertEqual(target.workingDirectory, "/tmp/proj")
+            XCTAssertEqual(target.terminalTTY, "/dev/ttys009")
+        }
+    }
+
+    func testGhosttySurfaceSafeEventHelpers() {
+        XCTAssertTrue(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: nil))
+        XCTAssertTrue(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: "SessionStart"))
+        XCTAssertTrue(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: "session_start"))
+        XCTAssertTrue(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: "UserPromptSubmit"))
+        XCTAssertFalse(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: "PreToolUse"))
+        XCTAssertFalse(TerminalProbe.shouldCaptureGhosttySurfaceID(hookEventName: "Stop"))
+    }
+
+    func testGhosttyMergePreservesSessionIDWhenLaterHookOmitsIt() {
+        let base = JumpTarget(
+            terminalApp: "Ghostty",
+            workingDirectory: "/tmp/a",
+            terminalSessionID: "surface-original"
+        )
+        let later = JumpTarget(
+            terminalApp: "Ghostty",
+            workingDirectory: "/tmp/a",
+            terminalSessionID: nil
+        )
+        let merged = base.merging(later)
+        XCTAssertEqual(merged.terminalSessionID, "surface-original")
+        XCTAssertEqual(merged.terminalApp, "Ghostty")
+    }
+
+    func testQueryGhosttyFocusedSurfaceIDUsesRunner() {
+        let id = TerminalProbe.queryGhosttyFocusedSurfaceID { script in
+            XCTAssertTrue(script.contains("Ghostty"))
+            XCTAssertTrue(script.contains("focused terminal"))
+            return "  LIVE-SURFACE-ID  \n"
+        }
+        XCTAssertEqual(id, "LIVE-SURFACE-ID")
+        XCTAssertNil(TerminalProbe.queryGhosttyFocusedSurfaceID { _ in "" })
+        XCTAssertNil(TerminalProbe.queryGhosttyFocusedSurfaceID { _ in nil })
+    }
 }
 
 final class WarpSQLiteReaderTests: XCTestCase {

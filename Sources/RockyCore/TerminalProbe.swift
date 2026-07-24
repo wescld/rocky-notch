@@ -5,19 +5,42 @@ import Foundation
 /// providers) so unit tests never need a real terminal or Warp install.
 ///
 /// Fail-open: every path returns a partial `JumpTarget`; never throws.
+///
+/// ## Ghostty limitations
+/// Current Ghostty (macOS) sets `TERM_PROGRAM=ghostty`, `GHOSTTY_RESOURCES_DIR`,
+/// `GHOSTTY_BIN_DIR`, and `GHOSTTY_SHELL_FEATURES`, but does **not** export a
+/// per-surface id into the shell environment. The stable surface UUID only
+/// appears via AppleScript (`id of terminal`). We optionally query the
+/// *focused* terminal on SessionStart / UserPromptSubmit — the only moments
+/// the focused surface is reliably the session's host. Later hooks must not
+/// refresh that id: the user may have switched tabs, and stamping the newly
+/// focused surface would send jump-back to the wrong place. Merge preserves
+/// the last good `terminalSessionID` when later probes leave it nil.
 public enum TerminalProbe {
+    /// Hook events where Ghostty's focused-surface AppleScript (or any env
+    /// surface id) is safe to trust.
+    public static let ghosttySurfaceSafeEvents: Set<String> = [
+        "SessionStart",
+        "UserPromptSubmit",
+        "BeforeSubmitPrompt",
+    ]
+
     /// Build a jump target from the hook process environment.
     ///
     /// - Parameters:
     ///   - environment: process env (`ProcessInfo.processInfo.environment`)
     ///   - cwd: session working directory from the hook payload
+    ///   - hookEventName: raw/canonical hook event name; gates Ghostty surface capture
     ///   - currentTTY: provider for the controlling TTY path
     ///   - warpPaneResolver: optional Warp pane UUID for `cwd` (SQLite)
+    ///   - ghosttySurfaceResolver: optional AppleScript (or test) surface-id probe
     public static func jumpTarget(
         environment: [String: String],
         cwd: String?,
+        hookEventName: String? = nil,
         currentTTY: () -> String? = { Self.currentTTYPath() },
-        warpPaneResolver: (String) -> String? = { _ in nil }
+        warpPaneResolver: (String) -> String? = { _ in nil },
+        ghosttySurfaceResolver: () -> String? = { nil }
     ) -> JumpTarget {
         let terminalApp = inferTerminalApp(from: environment)
         var target = JumpTarget(
@@ -44,10 +67,14 @@ public enum TerminalProbe {
         }
 
         if terminalApp == "Ghostty" {
-            // Ghostty exposes GHOSTTY_SURFACE_ID in newer builds; optional.
-            target.terminalSessionID =
-                emptyToNil(environment["GHOSTTY_SURFACE_ID"])
-                ?? target.terminalSessionID
+            // Only stamp a surface id on safe events. Unsafe events leave
+            // terminalSessionID nil so SessionStore.merging keeps the prior id.
+            if shouldCaptureGhosttySurfaceID(hookEventName: hookEventName) {
+                target.terminalSessionID =
+                    ghosttySurfaceID(from: environment)
+                    ?? emptyToNil(ghosttySurfaceResolver())
+                    ?? target.terminalSessionID
+            }
         }
 
         if target.terminalTTY == nil {
@@ -72,6 +99,62 @@ public enum TerminalProbe {
         }
 
         return target
+    }
+
+    /// Whether this hook event is safe to use for Ghostty surface id capture.
+    ///
+    /// - `nil` event name: treat as safe (manual/test probes, no merge risk).
+    /// - SessionStart / UserPromptSubmit (and Cursor BeforeSubmitPrompt): safe.
+    /// - Everything else: skip — focused-surface queries would be wrong after
+    ///   the user switches Ghostty tabs mid-turn.
+    public static func shouldCaptureGhosttySurfaceID(hookEventName: String?) -> Bool {
+        guard let hookEventName, !hookEventName.isEmpty else { return true }
+        let canonical = HookEvent.Kind.canonical(hookEventName)
+        return ghosttySurfaceSafeEvents.contains(canonical)
+    }
+
+    /// Surface / terminal id from Ghostty-related env vars when present.
+    ///
+    /// Current Ghostty releases do not set these; kept for forward-compat and
+    /// custom builds. Order is most-specific first.
+    public static func ghosttySurfaceID(from environment: [String: String]) -> String? {
+        let keys = [
+            "GHOSTTY_SURFACE_ID",
+            "GHOSTTY_TERMINAL_ID",
+            "GHOSTTY_SESSION_ID",
+        ]
+        for key in keys {
+            if let value = emptyToNil(environment[key]) {
+                return value
+            }
+        }
+        // macOS sometimes exposes TERM_SESSION_ID; only trust it alongside
+        // Ghostty identity so we do not steal another terminal's session token.
+        if inferTerminalApp(from: environment) == "Ghostty" {
+            return emptyToNil(environment["TERM_SESSION_ID"])
+        }
+        return nil
+    }
+
+    /// Query Ghostty for the focused terminal surface id via AppleScript.
+    ///
+    /// Fail-open: returns nil on any error / timeout. Intended for hook use on
+    /// SessionStart / UserPromptSubmit only (see `shouldCaptureGhosttySurfaceID`).
+    public static func queryGhosttyFocusedSurfaceID(
+        runner: ((String) -> String?)? = nil
+    ) -> String? {
+        let script = """
+        tell application "Ghostty"
+            if not (it is running) then return ""
+            try
+                return id of focused terminal of selected tab of front window as text
+            on error
+                return ""
+            end try
+        end tell
+        """
+        let run = runner ?? { runOsascript($0, timeout: 0.35) }
+        return emptyToNil(run(script))
     }
 
     /// Warp session UUID used by `warp://session/<uuid>` deep links.
@@ -159,7 +242,7 @@ public enum TerminalProbe {
         if environment["WARP_IS_LOCAL_SHELL_SESSION"] != nil {
             return "Warp"
         }
-        if environment["GHOSTTY_RESOURCES_DIR"] != nil {
+        if environment["GHOSTTY_RESOURCES_DIR"] != nil || environment["GHOSTTY_BIN_DIR"] != nil {
             return "Ghostty"
         }
         return nil
@@ -242,6 +325,33 @@ public enum TerminalProbe {
         let text = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return emptyToNil(text)
+    }
+
+    /// Run `/usr/bin/osascript -e` with a wall-clock cap. Fail-open.
+    static func runOsascript(_ source: String, timeout: TimeInterval) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            process.terminate()
+            return nil
+        }
+        guard process.terminationStatus == 0 else { return nil }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func emptyToNil(_ value: String?) -> String? {
