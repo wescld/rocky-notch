@@ -33,8 +33,9 @@
 	     overwrite this via SPARKLE_PUBLIC_ED_KEY. Leave empty until you have keys. -->
 	<key>SUPublicEDKey</key>
 	<string></string>
-	<!-- First launch stays quiet; Sparkle asks on the second launch by default. -->
+	<!-- Background checks only matter once SUPublicEDKey is set (release/CI).
+	     Local ad-hoc builds leave the key empty and never start Sparkle. -->
 	<key>SUEnableAutomaticChecks</key>
-	<true/>
+	<false/>
 </dict>
 </plist>
