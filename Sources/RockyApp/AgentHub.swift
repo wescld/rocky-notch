@@ -12,6 +12,8 @@ final class AgentHub: ObservableObject {
     @Published private(set) var celebrating: Set<String> = []
     /// Claude account rate limits (from statusLine cache), polled lightly.
     @Published private(set) var claudeUsage: ClaudeUsageSnapshot?
+    /// Codex account rate limits (from local ~/.codex rollout logs), polled lightly.
+    @Published private(set) var codexUsage: CodexUsageSnapshot?
 
     /// Hook-side timeout is 60s; we always decide 5s earlier so the hook
     /// exits cleanly (passthrough) instead of being killed.
@@ -75,10 +77,10 @@ final class AgentHub: ObservableObject {
                 self?.flushPersistenceIfNeeded()
             }
         }
-        refreshClaudeUsage()
+        refreshAccountUsage()
         usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             Task { @MainActor [weak self] in
-                self?.refreshClaudeUsage()
+                self?.refreshAccountUsage()
             }
         }
     }
@@ -159,12 +161,29 @@ final class AgentHub: ObservableObject {
         try? SessionPersistence.save(store.ordered)
     }
 
-    func refreshClaudeUsage() {
+    /// Refresh Claude + Codex account rate-limit chips (opt-in via Preferences).
+    func refreshAccountUsage() {
         guard Preferences.showAccountUsage else {
             if claudeUsage != nil { claudeUsage = nil }
+            if codexUsage != nil { codexUsage = nil }
             return
         }
         claudeUsage = ClaudeUsageLoader.load()
+        // Codex walks recent rollout files — keep it off the main thread, then
+        // publish on MainActor so SwiftUI observes the chip.
+        Task { [weak self] in
+            let snap = await Task.detached(priority: .utility) {
+                CodexUsageLoader.load()
+            }.value
+            await MainActor.run {
+                self?.codexUsage = snap
+            }
+        }
+    }
+
+    /// Back-compat alias used by Settings until call sites fully migrate.
+    func refreshClaudeUsage() {
+        refreshAccountUsage()
     }
 
     /// Cursor's bundle id is a todesktop hash and changes across builds; match
