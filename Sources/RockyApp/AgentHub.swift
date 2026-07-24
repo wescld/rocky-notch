@@ -56,6 +56,10 @@ final class AgentHub: ObservableObject {
 
     func start() {
         restoreSessionsFromDisk()
+        // Agent-written JSONL (Claude/Codex) — observational rows only; does
+        // not invent permissions. I/O is off the main thread so launch stays
+        // snappy even when transcript roots are large.
+        discoverSessionsFromTranscripts()
         do {
             try server.start()
         } catch IPCServer.StartError.anotherInstanceRunning {
@@ -147,6 +151,35 @@ final class AgentHub: ObservableObject {
         for session in alive where session.agent == "claude-code" {
             if let path = session.transcriptPath {
                 transcripts.watch(sessionId: session.id, path: path)
+            }
+        }
+    }
+
+    /// Seed idle observational rows from local Claude/Codex JSONL transcripts.
+    /// Never overwrites a live (or already-restored) session id.
+    private func discoverSessionsFromTranscripts() {
+        Task.detached(priority: .utility) {
+            let found = SessionDiscovery.discoverRecent()
+            guard !found.isEmpty else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                let knownBefore = Set(self.store.sessions.keys)
+                self.store.restore(found)
+                var seeded = 0
+                for session in found {
+                    guard knownBefore.contains(session.id) == false,
+                          self.store.sessions[session.id] != nil
+                    else { continue }
+                    seeded += 1
+                    if session.agent == "claude-code", let path = session.transcriptPath {
+                        self.transcripts.watch(sessionId: session.id, path: path)
+                    }
+                }
+                if seeded > 0 {
+                    // Quiet log only — no UI toast spam.
+                    NSLog("Rocky: discovered %d session(s) from local transcripts", seeded)
+                    self.markPersistDirty()
+                }
             }
         }
     }
