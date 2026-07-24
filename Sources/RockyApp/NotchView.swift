@@ -241,7 +241,7 @@ struct SessionListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Color.clear.frame(height: 6)
-            if !hub.sessions.isEmpty || hub.claudeUsage != nil {
+            if !hub.sessions.isEmpty || hub.claudeUsage != nil || hub.codexUsage != nil {
                 insightsHeader
             }
             if let done = completionSession {
@@ -289,8 +289,12 @@ struct SessionListView: View {
     private var insightsHeader: some View {
         let hasTokens = SessionMeta.tokens(totalTokens) != nil
         let hasWork = SessionMeta.workTime(totalWork) != nil
-        let usage = Preferences.showAccountUsage ? hub.claudeUsage : nil
-        if hasTokens || hasWork || usage != nil {
+        let showUsage = Preferences.showAccountUsage
+        let claude = showUsage ? hub.claudeUsage : nil
+        let codex = showUsage ? hub.codexUsage : nil
+        let hasClaude = claude?.fiveHour != nil
+        let hasCodex = codex?.primary != nil
+        if hasTokens || hasWork || hasClaude || hasCodex {
             HStack(spacing: 5) {
                 if hasTokens || hasWork {
                     TokenIcon(size: 11)
@@ -304,13 +308,23 @@ struct SessionListView: View {
                         Text(work).foregroundStyle(Palette.inkSecondary)
                     }
                 }
-                if let usage, let five = usage.fiveHour {
+                if let five = claude?.fiveHour {
                     if hasTokens || hasWork {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
                     Text("Cl \(five.roundedUsedPercentage)% 5h")
                         .foregroundStyle(
                             five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
+                        )
+                }
+                if let primary = codex?.primary {
+                    if hasTokens || hasWork || hasClaude {
+                        Text("·").foregroundStyle(Palette.inkTertiary)
+                    }
+                    // Sample: "Cd 13% 5h" (primary short window)
+                    Text("Cd \(primary.roundedUsedPercentage)% \(primary.label)")
+                        .foregroundStyle(
+                            primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
                         )
                 }
                 Spacer()

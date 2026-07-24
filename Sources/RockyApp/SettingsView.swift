@@ -176,12 +176,18 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Claude usage") {
+            Section("Account usage") {
                 Toggle("Show account rate limits in the notch", isOn: $showAccountUsage)
                     .onChange(of: showAccountUsage) { _, newValue in
                         Preferences.showAccountUsage = newValue
-                        hub.refreshClaudeUsage()
+                        hub.refreshAccountUsage()
                     }
+                Text("Claude and Codex chips share this toggle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Claude usage") {
                 if statusLineStatus.isInstalled {
                     HStack {
                         Text(statusLineStatus.isWrapper
@@ -191,7 +197,7 @@ struct SettingsView: View {
                         Spacer()
                         Button("Remove") {
                             performUsage { try ClaudeStatusLineInstaller.uninstall() }
-                            hub.refreshClaudeUsage()
+                            hub.refreshAccountUsage()
                         }
                     }
                 } else {
@@ -199,7 +205,7 @@ struct SettingsView: View {
                            ? "Install bridge (wrap existing status line)"
                            : "Install Claude status line bridge") {
                         performUsage { try ClaudeStatusLineInstaller.install() }
-                        hub.refreshClaudeUsage()
+                        hub.refreshAccountUsage()
                     }
                     Text(
                         "Opt-in. Writes rate limits to \(ClaudeUsageLoader.defaultCacheURL.path) "
@@ -225,6 +231,36 @@ struct SettingsView: View {
                     Text(usageError)
                         .font(.caption)
                         .foregroundStyle(.red)
+                }
+            }
+
+            Section("Codex usage") {
+                Text(
+                    "Reads the latest token_count.rate_limits from local "
+                        + "~/.codex/sessions/**/rollout-*.jsonl (no network, no install)."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if let usage = hub.codexUsage, !usage.isEmpty {
+                    if let plan = usage.planType {
+                        LabeledContent("Plan", value: plan)
+                    }
+                    ForEach(usage.windows, id: \.key) { window in
+                        LabeledContent(
+                            "\(window.label) window",
+                            value: "\(window.roundedUsedPercentage)% used"
+                        )
+                    }
+                    Button("Refresh") {
+                        hub.refreshAccountUsage()
+                    }
+                } else if showAccountUsage {
+                    Text("No recent Codex rate-limit data found. Run a Codex turn to seed local rollouts.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Refresh") {
+                        hub.refreshAccountUsage()
+                    }
                 }
             }
 
