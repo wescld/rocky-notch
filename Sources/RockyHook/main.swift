@@ -98,15 +98,20 @@ if agent == "cursor",
 
   // Terminal / pane hints for click-to-jump. Best-effort and fail-open —
   // Warp SQLite lookup is bounded by sqlite busy timeout; never stalls the agent.
+  // Ghostty surface ids: env (rare) or focused-terminal AppleScript, only on
+  // SessionStart / UserPromptSubmit so mid-turn tab switches cannot corrupt it.
   let env = ProcessInfo.processInfo.environment
   let jump = TerminalProbe.jumpTarget(
       environment: env,
       cwd: event.cwd,
-      warpPaneResolver: { cwd in WarpSQLiteReader().lookupPaneUUID(forCwd: cwd) }
+      hookEventName: event.hookEventName,
+      warpPaneResolver: { cwd in WarpSQLiteReader().lookupPaneUUID(forCwd: cwd) },
+      ghosttySurfaceResolver: { TerminalProbe.queryGhosttyFocusedSurfaceID() }
   )
   if let app = jump.terminalApp {
       debugLog(
           "jump app=\(app) tty=\(jump.terminalTTY ?? "-") "
+              + "session=\(jump.terminalSessionID ?? "-") "
               + "warp=\(jump.warpPaneUUID ?? "-") tmux=\(jump.tmuxTarget ?? "-")"
       )
   }

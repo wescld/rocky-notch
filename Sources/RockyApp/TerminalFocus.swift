@@ -80,7 +80,7 @@ enum TerminalFocus {
                     return
                 }
             case "Ghostty":
-                if jumpToGhostty(sessionID: target.terminalSessionID) { return }
+                if jumpToGhostty(target) { return }
             default:
                 break
             }
@@ -293,32 +293,112 @@ enum TerminalFocus {
         return runAppleScriptBool(source)
     }
 
-    private static func jumpToGhostty(sessionID: String?) -> Bool {
-        // Ghostty scripting is limited; activate + session id when available.
-        _ = run("/usr/bin/open", ["-b", "com.mitchellh.ghostty"])
-        guard let sessionID, !sessionID.isEmpty else { return true }
-        let escaped = escapeAppleScript(sessionID)
+    /// Focus a Ghostty surface by stable terminal id (preferred), else cwd.
+    ///
+    /// Ghostty's sdef exposes `window` / `tab` / `terminal` with `id`, plus
+    /// `activate window`, `select tab`, and `focus` on a terminal. Focus of a
+    /// split can settle asynchronously, so we retry a few times when we have
+    /// a surface id. No id and no cwd → activate app only (still "success"
+    /// so the caller does not double-activate via `activateHost`).
+    ///
+    /// Limitations: requires Automation permission for Ghostty; surface ids
+    /// are only trustworthy when captured on SessionStart/UserPromptSubmit
+    /// (see `TerminalProbe`). If the surface was closed, falls through to
+    /// app activate.
+    private static func jumpToGhostty(_ target: JumpTarget) -> Bool {
+        let sessionID = target.terminalSessionID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cwd = target.workingDirectory?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if sessionID.isEmpty, cwd.isEmpty {
+            return run("/usr/bin/open", ["-b", "com.mitchellh.ghostty"])
+        }
+
+        let sid = escapeAppleScript(sessionID.isEmpty ? nil : sessionID)
+        let wd = escapeAppleScript(cwd.isEmpty ? nil : cwd)
+        // Delays are small; Ghostty applies focus asynchronously after `focus`.
         let source = """
         tell application "Ghostty"
             if not (it is running) then return false
             activate
-            try
+
+            set targetWindow to missing value
+            set targetTab to missing value
+            set targetTerminal to missing value
+
+            if "\(sid)" is not "" then
                 repeat with aWindow in windows
                     repeat with aTab in tabs of aWindow
                         repeat with aTerminal in terminals of aTab
-                            if (id of aTerminal as text) is "\(escaped)" then
-                                set frontmost of aWindow to true
-                                select aTab
-                                return true
-                            end if
+                            try
+                                if (id of aTerminal as text) is "\(sid)" then
+                                    set targetWindow to aWindow
+                                    set targetTab to aTab
+                                    set targetTerminal to aTerminal
+                                    exit repeat
+                                end if
+                            end try
                         end repeat
+                        if targetTerminal is not missing value then exit repeat
                     end repeat
+                    if targetTerminal is not missing value then exit repeat
                 end repeat
-            end try
+            end if
+
+            if targetTerminal is missing value and "\(wd)" is not "" then
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        repeat with aTerminal in terminals of aTab
+                            try
+                                if (working directory of aTerminal as text) is "\(wd)" then
+                                    set targetWindow to aWindow
+                                    set targetTab to aTab
+                                    set targetTerminal to aTerminal
+                                    exit repeat
+                                end if
+                            end try
+                        end repeat
+                        if targetTerminal is not missing value then exit repeat
+                    end repeat
+                    if targetTerminal is not missing value then exit repeat
+                end repeat
+            end if
+
+            if targetTerminal is missing value then return false
+
+            repeat 3 times
+                try
+                    if targetWindow is not missing value then
+                        activate window targetWindow
+                        delay 0.04
+                    end if
+                    if targetTab is not missing value then
+                        select tab targetTab
+                        delay 0.04
+                    end if
+                    focus targetTerminal
+                    delay 0.08
+                end try
+
+                if "\(sid)" is "" then return true
+
+                try
+                    if (id of focused terminal of selected tab of front window as text) is "\(sid)" then
+                        return true
+                    end if
+                end try
+            end repeat
+
+            -- Matched a surface but could not confirm focus; still best-effort.
+            return true
         end tell
-        return false
         """
-        return runAppleScriptBool(source)
+        if runAppleScriptBool(source) {
+            return true
+        }
+        // Script miss / Automation denied — at least bring Ghostty forward.
+        return run("/usr/bin/open", ["-b", "com.mitchellh.ghostty"])
     }
 
     // MARK: - tmux

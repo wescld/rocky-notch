@@ -78,6 +78,43 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.warpPaneUUID, "DEADBEEF")
     }
 
+    func testGhosttySessionIDPreservedAcrossUnsafeHook() {
+        var store = SessionStore()
+        let start = HookEnvelope(
+            requestId: "r1",
+            hookPid: 1,
+            agent: "claude-code",
+            event: HookEvent(sessionId: "s1", hookEventName: "SessionStart", cwd: "/tmp/proj"),
+            jumpTarget: JumpTarget(
+                terminalApp: "Ghostty",
+                workingDirectory: "/tmp/proj",
+                terminalSessionID: "surface-abc"
+            )
+        )
+        store.apply(start, at: t0)
+        XCTAssertEqual(store.sessions["s1"]?.jumpTarget?.terminalSessionID, "surface-abc")
+
+        // PreToolUse probe intentionally omits surface id (unsafe event).
+        let tool = HookEnvelope(
+            requestId: "r2",
+            hookPid: 1,
+            agent: "claude-code",
+            event: HookEvent(
+                sessionId: "s1",
+                hookEventName: "PreToolUse",
+                cwd: "/tmp/proj",
+                toolName: "Bash"
+            ),
+            jumpTarget: JumpTarget(terminalApp: "Ghostty", workingDirectory: "/tmp/proj")
+        )
+        store.apply(tool, at: t0 + 1)
+        XCTAssertEqual(
+            store.sessions["s1"]?.jumpTarget?.terminalSessionID,
+            "surface-abc",
+            "merge must keep Ghostty surface id when later hooks leave it nil"
+        )
+    }
+
     func testLifecycle() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
