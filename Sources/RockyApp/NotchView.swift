@@ -92,7 +92,7 @@ struct NotchView: View {
             // and bottom edges (clear at the top, so the fusion with the
             // physical notch stays seamless) — reads as a glass edge
             // catching light.
-            shape.stroke(
+            shape.strokeBorder(
                 LinearGradient(
                     stops: [
                         .init(color: .clear, location: 0),
@@ -172,14 +172,25 @@ struct NotchView: View {
 /// The real notch silhouette: concave flares at the top (where the panel
 /// meets the menu bar, like the hardware cutout) and convex rounded bottom
 /// corners. The top edge stays straight for seamless fusion.
-struct NotchShape: Shape {
+struct NotchShape: InsettableShape {
     var topRadius: CGFloat
     var bottomRadius: CGFloat
     /// false = concave flare (fused with the hardware notch, collapsed);
     /// true = regular convex rounding (floating card, expanded).
     var convexTop: Bool = false
+    /// Amount the path is pulled inward on every edge. Used by `strokeBorder`
+    /// so the rim is drawn fully inside the bounds — a centered `stroke` would
+    /// clip its outer half against the window and read as a broken border.
+    var inset: CGFloat = 0
+
+    func inset(by amount: CGFloat) -> NotchShape {
+        var copy = self
+        copy.inset += amount
+        return copy
+    }
 
     func path(in rect: CGRect) -> Path {
+        let rect = rect.insetBy(dx: inset, dy: inset)
         var p = Path()
         let t = topRadius
         let b = bottomRadius
@@ -322,20 +333,28 @@ struct SessionListView: View {
                     if hasTokens || hasWork {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    Text("Cl \(five.roundedUsedPercentage)% 5h")
-                        .foregroundStyle(
-                            five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                        )
+                    HStack(spacing: 3) {
+                        AgentLogo(agent: "claude-code", size: 11)
+                        Text("\(five.roundedUsedPercentage)% 5h")
+                    }
+                    .foregroundStyle(
+                        five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
+                    )
+                    .help("Claude account usage")
                 }
                 if let primary = codex?.primary {
                     if hasTokens || hasWork || hasClaude {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    // Sample: "Cd 13% 5h" (primary short window)
-                    Text("Cd \(primary.roundedUsedPercentage)% \(primary.label)")
-                        .foregroundStyle(
-                            primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                        )
+                    // Sample: logo + "13% 5h" (primary short window)
+                    HStack(spacing: 3) {
+                        AgentLogo(agent: "codex", size: 11)
+                        Text("\(primary.roundedUsedPercentage)% \(primary.label)")
+                    }
+                    .foregroundStyle(
+                        primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
+                    )
+                    .help("Codex account usage")
                 }
                 Spacer()
             }
@@ -370,7 +389,7 @@ struct CompletionCard: View {
                 }
             }
             Spacer(minLength: 8)
-            Chip(text: SessionMeta.agentLabel(session))
+            AgentChip(session: session)
             if let terminal = SessionMeta.terminalLabel(session) {
                 Chip(text: terminal)
             }
@@ -415,6 +434,50 @@ struct TokenIcon: View {
             Image(systemName: "sparkle")
                 .font(.system(size: size * 0.8))
                 .foregroundStyle(Palette.green)
+        }
+    }
+}
+
+/// A CLI's brand mark, monochrome so it tints with the surrounding text
+/// (amber when a quota runs hot, secondary ink otherwise). Falls back to
+/// nothing renderable when the agent has no bundled logo — callers show the
+/// text label instead.
+struct AgentLogo: View {
+    let agent: String
+    var size: CGFloat = 11
+
+    /// Agent key (as stored on the session) → bundled `logo-<slug>.png`.
+    static func slug(for agent: String) -> String? {
+        switch agent {
+        case "claude-code": return "claude"
+        case "codex": return "codex"
+        case "grok": return "grok"
+        case "cursor": return "cursor"
+        case "kimi-code": return "kimi"
+        case "opencode": return "opencode"
+        default: return nil
+        }
+    }
+
+    private static var cache: [String: NSImage] = [:]
+
+    private static func image(_ slug: String) -> NSImage? {
+        if let hit = cache[slug] { return hit }
+        guard let url = Bundle.main.url(
+            forResource: "logo-\(slug)", withExtension: "png", subdirectory: "Art"
+        ), let image = NSImage(contentsOf: url) else { return nil }
+        image.isTemplate = true
+        cache[slug] = image
+        return image
+    }
+
+    var body: some View {
+        if let slug = Self.slug(for: agent), let image = Self.image(slug) {
+            Image(nsImage: image)
+                .resizable()
+                .renderingMode(.template)
+                .scaledToFit()
+                .frame(width: size, height: size)
         }
     }
 }
@@ -633,6 +696,30 @@ struct Chip: View {
     }
 }
 
+/// The agent identity chip: the CLI's monochrome logo, with the name as a
+/// hover tooltip. Falls back to a plain text chip for agents we have no logo
+/// for, so nothing goes unlabelled.
+struct AgentChip: View {
+    let session: AgentSession
+
+    var body: some View {
+        let label = SessionMeta.agentLabel(session)
+        if AgentLogo.slug(for: session.agent) != nil {
+            AgentLogo(agent: session.agent, size: 12)
+                .foregroundStyle(Palette.inkSecondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(0.09))
+                )
+                .help(label)
+        } else {
+            Chip(text: label)
+        }
+    }
+}
+
 enum SessionMeta {
     static func tokens(_ count: Int) -> String? {
         guard count > 0 else { return nil }
@@ -787,7 +874,7 @@ struct SessionRow: View {
             if let tokens = SessionMeta.tokens(session.tokens) {
                 Chip(text: tokens)
             }
-            Chip(text: SessionMeta.agentLabel(session))
+            AgentChip(session: session)
             if let terminal = SessionMeta.terminalLabel(session) {
                 Chip(text: terminal)
             }
@@ -843,7 +930,7 @@ struct PendingSessionCard: View {
                             .foregroundStyle(Palette.amber)
                     }
                     Spacer(minLength: 8)
-                    Chip(text: SessionMeta.agentLabel(session))
+                    AgentChip(session: session)
                     if let terminal = SessionMeta.terminalLabel(session) {
                         Chip(text: terminal)
                     }
