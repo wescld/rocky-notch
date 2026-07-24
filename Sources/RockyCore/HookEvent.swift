@@ -237,6 +237,28 @@ public struct HookEvent: Codable, Equatable, Sendable {
         self.agentId = agentId
     }
 
+    /// Copy carrying the agent's closing words. Used when they have to be
+    /// recovered out of band, as they do for Kimi (see `KimiTranscript`).
+    public func withLastAssistantMessage(_ message: String) -> HookEvent {
+        HookEvent(
+            sessionId: sessionId,
+            hookEventName: hookEventName,
+            cwd: cwd,
+            transcriptPath: transcriptPath,
+            permissionMode: permissionMode,
+            toolName: toolName,
+            toolInput: toolInput,
+            message: self.message,
+            notificationType: notificationType,
+            source: source,
+            model: model,
+            sessionTitle: sessionTitle,
+            lastAssistantMessage: message,
+            prompt: prompt,
+            agentId: agentId
+        )
+    }
+
     /// One-line human summary of what is being requested (for the approval card).
     public var toolSummary: String? {
         guard let toolName else { return nil }
