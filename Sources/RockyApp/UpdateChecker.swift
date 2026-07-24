@@ -3,31 +3,40 @@ import Sparkle
 
 /// Thin wrapper around Sparkle 2's `SPUStandardUpdaterController`.
 ///
-/// - Automatic background checks are disabled in DEBUG builds.
-/// - If `SUFeedURL` is missing/empty in Info.plist, the updater is not
-///   started at all (local/dev builds still work without an appcast).
+/// Local / ad-hoc builds ship with an empty `SUPublicEDKey`. Sparkle must
+/// **not** start in that case — otherwise it alerts "Unable to Check For
+/// Updates" on every launch. Real release builds inject a public key via CI
+/// (`SPARKLE_PUBLIC_ED_KEY`) and get background checks.
 @MainActor
 final class UpdateChecker {
     static let shared = UpdateChecker()
 
     private var updaterController: SPUStandardUpdaterController?
-    /// True when Sparkle is wired and the user can invoke "Check for Updates…".
+    /// True when Sparkle is fully configured (feed URL + Ed25519 public key).
     private(set) var isAvailable = false
-    private var startedOnDemand = false
 
     private init() {}
 
+    /// Feed + public key both required before Sparkle is allowed to start.
+    private static var isFullyConfigured: Bool {
+        let feed = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let publicKey = (Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !feed.isEmpty && !publicKey.isEmpty
+    }
+
     /// Call once from `applicationDidFinishLaunching`.
     func start() {
-        let feedURL = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !feedURL.isEmpty else {
+        guard Self.isFullyConfigured else {
+            // Dev / ad-hoc: stay silent. No controller, no Sparkle dialogs.
             isAvailable = false
+            updaterController = nil
             return
         }
 
         #if DEBUG
-        // Construct the controller but do not start scheduled checks.
+        // Construct but do not start scheduled checks in debug.
         updaterController = SPUStandardUpdaterController(
             startingUpdater: false,
             updaterDelegate: nil,
@@ -39,18 +48,18 @@ final class UpdateChecker {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        startedOnDemand = true
         #endif
         isAvailable = updaterController != nil
     }
 
     /// User-initiated update check (status menu / Settings).
+    /// No-op when Sparkle is not configured (local builds).
     func checkForUpdates(_ sender: Any? = nil) {
-        guard let updaterController else { return }
+        guard isAvailable, let updaterController else { return }
         #if DEBUG
-        if !startedOnDemand {
+        // Lazy-start on first manual check in DEBUG.
+        if !updaterController.updater.sessionInProgress {
             try? updaterController.updater.start()
-            startedOnDemand = true
         }
         #endif
         updaterController.checkForUpdates(sender)
