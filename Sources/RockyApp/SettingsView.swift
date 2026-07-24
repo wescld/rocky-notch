@@ -286,7 +286,7 @@ struct SettingsView: View {
                     Preferences.showAccountUsage = newValue
                     hub.refreshAccountUsage()
                 }
-            Text("Claude (Cl) and Codex (Cd) chips share this toggle. Expand the notch to see them.")
+            Text("The Claude and Codex usage chips share this toggle. Expand the notch to see them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
