@@ -3,4 +3,5 @@ dist/
 .DS_Store
 *.xcodeproj
 .swiftpm/
-docs/
+# Local scratch notes only — tracked docs live under docs/
+docs/local/

@@ -65,9 +65,13 @@ prompt appears. Rocky can never block your work.
 
 **[Download the latest release](https://github.com/wescld/rocky-notch/releases/latest)**, unzip and move `Rocky.app` to Applications.
 
-Release builds are not notarized yet: on first launch, go to System
-Settings → Privacy & Security → **Open Anyway** (or run
-`xattr -d com.apple.quarantine /Applications/Rocky.app`).
+Official releases are Developer ID signed and notarized when Apple
+credentials are configured in CI. If you see a Gatekeeper warning (unsigned
+or ad-hoc builds), open System Settings → Privacy & Security → **Open
+Anyway**, or run `xattr -d com.apple.quarantine /Applications/Rocky.app`.
+
+Rocky can check for updates in-app via [Sparkle](https://sparkle-project.org)
+(“Check for Updates…” in the status menu or Settings).
 
 Or build from source (Swift 5.10+, macOS 14+):
 
@@ -116,7 +120,7 @@ tool calls only when you enable it for `auto` / `yolo` sessions.
 ```sh
 make test               # unit tests (RockyCore)
 Tests/integration.sh    # end-to-end harness: real hook against the real app
-make app                # build dist/Rocky.app (ad-hoc signed)
+make app                # build dist/Rocky.app (ad-hoc signed, embeds Sparkle)
 ```
 
 - `Sources/RockyCore` - event models, IPC protocol, session state
@@ -124,7 +128,18 @@ make app                # build dist/Rocky.app (ad-hoc signed)
 - `Sources/RockyHook` - the tiny CLI executed by agent hooks.
   Aggressive deadlines, fail-open everywhere.
 - `Sources/RockyApp` - the app: IPC server, session hub, notch UI,
-  agent integrations.
+  agent integrations, Sparkle update checks.
+
+### Releasing / notarization / Sparkle keys
+
+See **[docs/releasing.md](docs/releasing.md)** for:
+
+- GitHub Actions secrets (`APPLE_CERTIFICATE_*`, notary API key, `SPARKLE_*`)
+- Local `make release SIGN="Developer ID Application: …"`
+- Generating Ed25519 keys (`make sparkle-keys`) and appcast XML
+
+The release workflow still produces a zip **without** secrets; with secrets
+present it codesigns, notarizes, staples, and attaches a Sparkle `appcast.xml`.
 
 ## License
 

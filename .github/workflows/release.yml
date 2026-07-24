@@ -12,6 +12,24 @@ on:
 permissions:
   contents: write
 
+# Required repository secrets for a fully signed + notarized + Sparkle-ready
+# release (all optional — without them the job still ships an ad-hoc zip):
+#
+#   APPLE_CERTIFICATE_BASE64   Developer ID Application .p12, base64-encoded
+#   APPLE_CERTIFICATE_PASSWORD Password for that .p12
+#   APPLE_TEAM_ID              10-char Team ID
+#
+# Notary (pick one auth method):
+#   APPLE_API_KEY_ID + APPLE_API_ISSUER + APPLE_API_KEY_BASE64
+#     — App Store Connect API key (.p8 base64)  [preferred for CI]
+#   or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
+#
+# Sparkle (optional, for in-app update signatures):
+#   SPARKLE_PRIVATE_KEY        Ed25519 private key string from generate_keys -x
+#   SPARKLE_PUBLIC_ED_KEY      Matching public key (also baked into Info.plist)
+#
+# Full walkthrough: docs/releasing.md
+
 jobs:
   release:
     runs-on: macos-15
@@ -38,36 +56,179 @@ jobs:
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.v.outputs.version }}" Support/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.v.outputs.build }}" Support/Info.plist
+          if [ -n "${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" ]; then
+            /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" Support/Info.plist \
+              || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" Support/Info.plist
+          fi
+
+      - name: Detect signing secrets
+        id: signing
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_PW: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          can_sign=false
+          can_notary=false
+          if [ -n "$CERT" ] && [ -n "$CERT_PW" ] && [ -n "$TEAM" ]; then
+            can_sign=true
+          fi
+          if [ -n "$API_KEY" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then
+            can_notary=true
+          elif [ -n "$APPLE_ID" ] && [ -n "$APP_PW" ] && [ -n "$TEAM" ]; then
+            can_notary=true
+          fi
+          echo "can_sign=$can_sign" >> "$GITHUB_OUTPUT"
+          echo "can_notary=$can_notary" >> "$GITHUB_OUTPUT"
+          if [ "$can_sign" = true ] && [ "$can_notary" = true ]; then
+            echo "mode=notarized" >> "$GITHUB_OUTPUT"
+          elif [ "$can_sign" = true ]; then
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Release signing mode: $( [ "$can_sign" = true ] && [ "$can_notary" = true ] && echo notarized || { [ "$can_sign" = true ] && echo signed || echo adhoc; } )"
 
       - name: Tests
         run: swift test
 
       - name: Build app
-        run: make app
+        run: |
+          chmod +x scripts/codesign-app.sh scripts/generate-appcast.sh
+          make app
 
-      - name: Package
-        run: ditto -c -k --keepParent dist/Rocky.app "dist/Rocky-${{ steps.v.outputs.version }}.zip"
+      - name: Import certificate and codesign
+        if: steps.signing.outputs.can_sign == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer_id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/rocky-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "error: no Developer ID Application identity found in imported keychain" >&2
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY"
+          scripts/codesign-app.sh dist/Rocky.app "$IDENTITY"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.mode == 'notarized'
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent dist/Rocky.app dist/Rocky-notary.zip
+          if [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+            xcrun notarytool submit dist/Rocky-notary.zip \
+              --key "$KEY_PATH" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER" \
+              --wait
+          else
+            xcrun notarytool submit dist/Rocky-notary.zip \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+          fi
+          xcrun stapler staple dist/Rocky.app
+          rm -f dist/Rocky-notary.zip
+
+      - name: Package zip
+        id: pkg
+        run: |
+          ZIP="dist/Rocky-${{ steps.v.outputs.version }}.zip"
+          ditto -c -k --keepParent dist/Rocky.app "$ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      - name: Generate appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          REPO="${{ github.repository }}"
+          VER="${{ steps.v.outputs.version }}"
+          BUILD="${{ steps.v.outputs.build }}"
+          URL="https://github.com/${REPO}/releases/download/v${VER}/Rocky-${VER}.zip"
+          scripts/generate-appcast.sh \
+            --version "$VER" \
+            --build "$BUILD" \
+            --url "$URL" \
+            --zip "${{ steps.pkg.outputs.zip }}" \
+            --out dist/appcast.xml
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.signing.outputs.mode }}
         run: |
-          cat > notes.md <<'EOF'
-          ## Install
+          VER="${{ steps.v.outputs.version }}"
+          BUILD="${{ steps.v.outputs.build }}"
+          {
+            echo "## Install"
+            echo ""
+            echo "Download the zip, unzip and move \`Rocky.app\` to Applications."
+            echo ""
+            case "$MODE" in
+              notarized)
+                echo "This build is **Developer ID signed and notarized**."
+                ;;
+              signed)
+                echo "This build is Developer ID signed but **not notarized** (notary secrets missing)."
+                echo "On first launch you may need System Settings → Privacy & Security → **Open Anyway**."
+                ;;
+              *)
+                echo "This build is **not notarized** (signing secrets not configured)."
+                echo "On first launch, macOS will warn about an unverified developer: go to"
+                echo "System Settings → Privacy & Security → **Open Anyway**, or run"
+                echo "\`xattr -d com.apple.quarantine /Applications/Rocky.app\`."
+                ;;
+            esac
+            echo ""
+            echo "You can always build from source instead: \`git clone\` + \`make run\`."
+            echo ""
+            echo "Build ${BUILD} · signing mode: \`${MODE}\`."
+          } > notes.md
 
-          Download the zip, unzip and move `Rocky.app` to Applications.
-
-          This build is not notarized yet. On first launch, macOS will warn
-          about an unverified developer: go to System Settings → Privacy &
-          Security → **Open Anyway**, or run
-          `xattr -d com.apple.quarantine /Applications/Rocky.app`.
-
-          You can always build from source instead: `git clone` + `make run`.
-          EOF
-          echo "" >> notes.md
-          echo "Build ${{ steps.v.outputs.build }}." >> notes.md
-          gh release create "v${{ steps.v.outputs.version }}" \
-            "dist/Rocky-${{ steps.v.outputs.version }}.zip" \
-            --title "Rocky ${{ steps.v.outputs.version }}" \
+          ASSETS=(
+            "dist/Rocky-${VER}.zip"
+            dist/appcast.xml
+          )
+          gh release create "v${VER}" \
+            "${ASSETS[@]}" \
+            --title "Rocky ${VER}" \
             --notes-file notes.md \
             --generate-notes
+
+      - name: Cleanup keychain
+        if: always() && steps.signing.outputs.can_sign == 'true'
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "${KEYCHAIN_PATH}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
