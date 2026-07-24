@@ -43,4 +43,24 @@ enum Preferences {
             UserDefaults.standard.set(newValue, forKey: "kimiGateEnabled")
         }
     }
+
+    /// Auto-expand the notch briefly when a turn finishes (completion card).
+    static var showCompletionCards: Bool {
+        get {
+            UserDefaults.standard.object(forKey: "showCompletionCards") as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "showCompletionCards")
+        }
+    }
+
+    /// Show Claude account rate-limit chip when a statusLine cache is present.
+    static var showAccountUsage: Bool {
+        get {
+            UserDefaults.standard.object(forKey: "showAccountUsage") as? Bool ?? true
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "showAccountUsage")
+        }
+    }
 }

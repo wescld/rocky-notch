@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import RockyCore
 
@@ -9,16 +10,55 @@ struct SettingsView: View {
 
     @State private var displayMode = Preferences.displayMode
     @State private var soundsEnabled = Preferences.soundsEnabled
+    @State private var showCompletionCards = Preferences.showCompletionCards
+    @State private var showAccountUsage = Preferences.showAccountUsage
     @State private var kimiGateEnabled = Preferences.kimiGateEnabled
+    @State private var launchAtLogin = LaunchAtLogin.isEnabled
+    @State private var launchError: String?
     @State private var integrationError: String?
+    @State private var usageError: String?
     @State private var refresh = 0
 
     private var kimiInstalled: Bool {
         integrations.contains { $0.pluginBackend != nil && $0.isInstalled }
     }
 
+    private var healthReports: [HookHealthReport] {
+        _ = refresh
+        return integrations.compactMap { $0.healthReport() }
+    }
+
+    private var statusLineStatus: ClaudeStatusLineInstaller.Status {
+        _ = refresh
+        return ClaudeStatusLineInstaller.status()
+    }
+
     var body: some View {
         Form {
+            Section("General") {
+                Toggle("Open at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        do {
+                            launchError = nil
+                            try LaunchAtLogin.setEnabled(newValue)
+                            launchAtLogin = LaunchAtLogin.isEnabled
+                        } catch {
+                            launchError = error.localizedDescription
+                            launchAtLogin = LaunchAtLogin.isEnabled
+                        }
+                    }
+                if let launchError {
+                    Text(launchError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                if LaunchAtLogin.statusDescription == "Needs approval in System Settings" {
+                    Text("Allow Rocky in System Settings → General → Login Items.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Display") {
                 Picker("Show Rocky in", selection: $displayMode) {
                     Text("Notch").tag(Preferences.DisplayMode.notch)
@@ -35,6 +75,11 @@ struct SettingsView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                Toggle("Show completion card when a turn finishes", isOn: $showCompletionCards)
+                    .onChange(of: showCompletionCards) { _, newValue in
+                        Preferences.showCompletionCards = newValue
+                    }
             }
 
             Section("Sounds") {
@@ -59,9 +104,6 @@ struct SettingsView: View {
                             } else {
                                 Button("Install") {
                                     perform { try integration.install() }
-                                    // Plugin-based agents (Kimi) don't hot-load:
-                                    // a running session must reload. Say so, once,
-                                    // right after a successful install.
                                     if integration.pluginBackend != nil,
                                        integrationError == nil {
                                         Self.showPluginReloadReminder(integration.displayName)
@@ -92,6 +134,100 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Diagnostics") {
+                let reports = healthReports
+                if reports.isEmpty {
+                    Text("No agent configs found on this Mac yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(reports.enumerated()), id: \.offset) { _, report in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(report.displayName)
+                                Spacer()
+                                if report.isHealthy {
+                                    Text("OK")
+                                        .foregroundStyle(.green)
+                                } else {
+                                    Text("Needs attention")
+                                        .foregroundStyle(.orange)
+                                }
+                            }
+                            ForEach(Array(report.issues.enumerated()), id: \.offset) { _, issue in
+                                Text(issue.description)
+                                    .font(.caption)
+                                    .foregroundStyle(
+                                        issue.severity == .error ? Color.red : Color.secondary
+                                    )
+                            }
+                            if report.errors.contains(where: \.isAutoRepairable) {
+                                Button("Repair \(report.displayName)") {
+                                    if let integration = integrations.first(where: {
+                                        $0.displayName == report.displayName
+                                    }) {
+                                        perform { try integration.install() }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            Section("Claude usage") {
+                Toggle("Show account rate limits in the notch", isOn: $showAccountUsage)
+                    .onChange(of: showAccountUsage) { _, newValue in
+                        Preferences.showAccountUsage = newValue
+                        hub.refreshClaudeUsage()
+                    }
+                if statusLineStatus.isInstalled {
+                    HStack {
+                        Text(statusLineStatus.isWrapper
+                            ? "Status line bridge installed (wrapping yours)"
+                            : "Status line bridge installed")
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Button("Remove") {
+                            performUsage { try ClaudeStatusLineInstaller.uninstall() }
+                            hub.refreshClaudeUsage()
+                        }
+                    }
+                } else {
+                    Button(statusLineStatus.hasConflict
+                           ? "Install bridge (wrap existing status line)"
+                           : "Install Claude status line bridge") {
+                        performUsage { try ClaudeStatusLineInstaller.install() }
+                        hub.refreshClaudeUsage()
+                    }
+                    Text(
+                        "Opt-in. Writes rate limits to \(ClaudeUsageLoader.defaultCacheURL.path) "
+                            + "via Claude's statusLine. Requires jq. "
+                            + "Start a Claude turn after install to seed the cache."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                if let usage = hub.claudeUsage, let five = usage.fiveHour {
+                    LabeledContent(
+                        "5-hour window",
+                        value: "\(five.roundedUsedPercentage)% used"
+                    )
+                    if let seven = usage.sevenDay {
+                        LabeledContent(
+                            "7-day window",
+                            value: "\(seven.roundedUsedPercentage)% used"
+                        )
+                    }
+                }
+                if let usageError {
+                    Text(usageError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
             Section("Details") {
                 LabeledContent("Version", value: Rocky.version)
                 LabeledContent("Active sessions", value: "\(hub.sessions.count)")
@@ -108,7 +244,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 480)
+        .frame(width: 480, height: 620)
         .id(refresh)
     }
 
@@ -122,8 +258,16 @@ struct SettingsView: View {
         refresh += 1
     }
 
-    /// One-time nudge after installing a plugin-based integration (Kimi): the
-    /// hook won't fire in an already-open session until the plugin is reloaded.
+    private func performUsage(_ action: () throws -> Void) {
+        do {
+            usageError = nil
+            try action()
+        } catch {
+            usageError = error.localizedDescription
+        }
+        refresh += 1
+    }
+
     private static func showPluginReloadReminder(_ displayName: String) {
         let alert = NSAlert()
         alert.messageText = "\(displayName) integration installed"
@@ -133,6 +277,45 @@ struct SettingsView: View {
         """
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+extension AgentIntegration {
+    /// Build a health report for Settings diagnostics (nil if agent absent).
+    func healthReport() -> HookHealthReport? {
+        guard isAgentPresent else { return nil }
+        if let pluginBackend {
+            // Kimi plugin path — surface install state simply.
+            var issues: [HookHealthReport.Issue] = []
+            let path = AgentIntegration.hookBinaryPath
+            if !FileManager.default.fileExists(atPath: path) {
+                issues.append(.binaryNotFound(path: path))
+            } else if !FileManager.default.isExecutableFile(atPath: path) {
+                issues.append(.binaryNotExecutable(path: path))
+            }
+            if !pluginBackend.isInstalled {
+                issues.append(.notInstalled)
+            } else if !pluginBackend.isCurrent {
+                issues.append(
+                    .staleCommandPath(recorded: "(plugin)", expected: path)
+                )
+            }
+            return HookHealthReport(
+                agent: "kimi-code",
+                displayName: displayName,
+                issues: issues,
+                expectedBinaryPath: path,
+                configPath: nil
+            )
+        }
+        let data = try? Data(contentsOf: configURL)
+        return HookHealthCheck.inspectNested(
+            agent: displayName.lowercased(),
+            displayName: displayName,
+            expectedBinaryPath: AgentIntegration.hookBinaryPath,
+            configPath: configURL.path,
+            configData: data
+        )
     }
 }
 

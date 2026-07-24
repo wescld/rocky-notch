@@ -3,10 +3,19 @@ import Combine
 import SwiftUI
 import RockyCore
 
+/// What the expanded notch is emphasizing right now.
+enum NotchAttention: Equatable {
+    /// Browse sessions / pending cards inline.
+    case list
+    /// A turn just finished — show a brief completion card.
+    case completion(sessionId: String)
+}
+
 @MainActor
 final class NotchUIState: ObservableObject {
     @Published var expanded = false
     @Published var hovering = false
+    @Published var attention: NotchAttention = .list
 }
 
 /// Owns the borderless panel that hugs the notch (or floats as a pill on
@@ -81,6 +90,7 @@ final class NotchWindowController {
     /// request resolves) the panel may collapse. The card stays available on
     /// re-hover for as long as the request lives.
     private var collapseTimer: Timer?
+    private var completionDismissTimer: Timer?
     private var revealedRequests: Set<String> = []
     private var acknowledgedRequests: Set<String> = []
 
@@ -95,7 +105,21 @@ final class NotchWindowController {
         }
         let hasUnseenPending = !pendingIds.subtracting(acknowledgedRequests).isEmpty
 
-        if hasNewPending || hasUnseenPending || state.hovering {
+        // Pending always wins over a completion surface.
+        if hasNewPending || hasUnseenPending {
+            if case .completion = state.attention {
+                state.attention = .list
+                completionDismissTimer?.invalidate()
+                completionDismissTimer = nil
+            }
+        }
+
+        let holdingCompletion: Bool = {
+            if case .completion = state.attention { return true }
+            return false
+        }()
+
+        if hasNewPending || hasUnseenPending || state.hovering || holdingCompletion {
             revealedRequests.formUnion(pendingIds)
             collapseTimer?.invalidate()
             collapseTimer = nil
@@ -156,10 +180,15 @@ final class NotchWindowController {
                 request.questions.map { $0.options.count + ($0.multiSelect ? 1 : 0) }.max() ?? 0
             }
             .reduce(0, +)
+        let showingCompletion: Bool = {
+            if case .completion = state.attention { return true }
+            return false
+        }()
+        // Completion card replaces one row visually; keep height similar to a pending card.
         let size = NotchView.size(
             expanded: state.expanded,
-            sessionCount: hub.sessions.count,
-            hasPending: hub.sessions.contains { $0.pending != nil },
+            sessionCount: max(0, hub.sessions.count - (showingCompletion ? 1 : 0)),
+            hasPending: hub.sessions.contains { $0.pending != nil } || showingCompletion,
             notchWidth: m.notchWidth,
             notchHeight: m.notchHeight,
             pendingDiffLines: pendingDiffLines,
@@ -182,7 +211,28 @@ final class NotchWindowController {
 
     /// Expand when a permission arrives so it's visible without hover.
     func revealPending() {
+        state.attention = .list
         state.expanded = true
+    }
+
+    /// Brief auto-expand completion card after a turn finishes.
+    func revealCompletion(sessionId: String) {
+        guard Preferences.showCompletionCards else { return }
+        // Don't interrupt an open permission card.
+        if hub.sessions.contains(where: { $0.pending != nil }) { return }
+        state.attention = .completion(sessionId: sessionId)
+        state.expanded = true
+        completionDismissTimer?.invalidate()
+        completionDismissTimer = Timer.scheduledTimer(withTimeInterval: 4.0, repeats: false) { _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if case .completion(let id) = self.state.attention, id == sessionId {
+                    self.state.attention = .list
+                }
+                self.completionDismissTimer = nil
+                self.syncAndLayout()
+            }
+        }
     }
 
     func setVisible(_ visible: Bool) {

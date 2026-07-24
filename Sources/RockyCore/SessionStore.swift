@@ -218,6 +218,13 @@ public struct SessionStore: Equatable, Sendable {
         }
     }
 
+    /// Seed from disk after relaunch. Only fills ids that are not already live.
+    public mutating func restore(_ restored: [AgentSession]) {
+        for session in restored where sessions[session.id] == nil {
+            sessions[session.id] = session
+        }
+    }
+
     public mutating func setLastAction(_ action: String, sessionId: String) {
         sessions[sessionId]?.lastAction = action
     }
