@@ -26,5 +26,16 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle 2: appcast hosted as a release asset (see docs/releasing.md). -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/wescld/rocky-notch/releases/latest/download/appcast.xml</string>
+	<!-- Public Ed25519 key from `make sparkle-keys` / generate_keys. CI can
+	     overwrite this via SPARKLE_PUBLIC_ED_KEY. Leave empty until you have keys. -->
+	<key>SUPublicEDKey</key>
+	<string></string>
+	<!-- Background checks only matter once SUPublicEDKey is set (release/CI).
+	     Local ad-hoc builds leave the key empty and never start Sparkle. -->
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
 </dict>
 </plist>

@@ -92,6 +92,24 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Updates") {
+                if UpdateChecker.shared.isAvailable {
+                    Button("Check for Updates…") {
+                        UpdateChecker.shared.checkForUpdates()
+                    }
+                    Text("Rocky uses Sparkle to download signed updates from GitHub Releases.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(
+                        "In-app updates need a release build with Sparkle keys "
+                            + "(see docs/releasing.md). Local make run builds skip the updater."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Details") {
                 LabeledContent("Version", value: Rocky.version)
                 LabeledContent("Active sessions", value: "\(hub.sessions.count)")
@@ -108,7 +126,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 480)
+        .frame(width: 460, height: 520)
         .id(refresh)
     }
 

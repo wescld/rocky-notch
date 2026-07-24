@@ -9,6 +9,10 @@ let package = Package(
         .executable(name: "rocky-hook", targets: ["RockyHook"]),
         .library(name: "RockyCore", targets: ["RockyCore"]),
     ],
+    dependencies: [
+        // Sparkle 2.x — binary XCFramework via SPM (Apache 2.0).
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
+    ],
     targets: [
         .target(
             name: "RockyCore",
@@ -16,7 +20,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "RockyApp",
-            dependencies: ["RockyCore"],
+            dependencies: [
+                "RockyCore",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
