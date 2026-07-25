@@ -322,12 +322,12 @@ struct SettingsView: View {
             if let usage = hub.claudeUsage, let five = usage.fiveHour {
                 LabeledContent(
                     "5-hour window",
-                    value: "\(five.roundedUsedPercentage)% used"
+                    value: usageValue(five.roundedUsedPercentage, resetsAt: five.resetsAt)
                 )
                 if let seven = usage.sevenDay {
                     LabeledContent(
                         "7-day window",
-                        value: "\(seven.roundedUsedPercentage)% used"
+                        value: usageValue(seven.roundedUsedPercentage, resetsAt: seven.resetsAt)
                     )
                 }
             }
@@ -353,7 +353,7 @@ struct SettingsView: View {
                 ForEach(usage.windows, id: \.key) { window in
                     LabeledContent(
                         "\(window.label) window",
-                        value: "\(window.roundedUsedPercentage)% used"
+                        value: usageValue(window.roundedUsedPercentage, resetsAt: window.resetsAt)
                     )
                 }
                 if let source = usage.sourcePath {
@@ -375,6 +375,15 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// "7% used" with a trailing "· resets …" when the window carries a reset time.
+    private func usageValue(_ percent: Int, resetsAt: Date?) -> String {
+        var text = "\(percent)% used"
+        if let resetsAt, let reset = UsageReset.describe(resetsAt, now: Date()) {
+            text += " · resets \(reset)"
+        }
+        return text
     }
 
     // MARK: - About
