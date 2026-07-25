@@ -534,6 +534,15 @@ public struct SessionStore: Equatable, Sendable {
     /// sessions whose host PID was never resolved, so a `cursor-agent` CLI
     /// session running in a live terminal is left to the normal dead-host /
     /// orphan pruning instead of being killed the moment the GUI app is closed.
+    /// Drop a single session the user dismissed from the panel. Returns its
+    /// abandoned pending request id, if any, so the hub can cancel the timeout.
+    @discardableResult
+    public mutating func remove(id: String) -> String? {
+        guard let session = sessions[id] else { return nil }
+        sessions[id] = nil
+        return session.pending?.requestId
+    }
+
     /// Returns abandoned pending request ids.
     @discardableResult
     public mutating func removeSessions(

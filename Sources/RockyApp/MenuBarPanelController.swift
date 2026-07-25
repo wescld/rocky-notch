@@ -119,7 +119,7 @@ struct MenuBarCard: View {
             .padding(.top, 10)
             .padding(.bottom, 2)
 
-            SessionListView(hub: hub)
+            SessionListView(hub: hub, onDismiss: { hub.dismiss(sessionId: $0) })
                 .padding(.horizontal, 18)
                 .padding(.bottom, 8)
         }

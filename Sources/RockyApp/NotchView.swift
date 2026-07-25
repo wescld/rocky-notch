@@ -397,7 +397,12 @@ struct NotchView: View {
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
     private var expandedContent: some View {
-        SessionListView(hub: hub, attention: state.attention, showsInsights: false)
+        SessionListView(
+            hub: hub,
+            attention: state.attention,
+            showsInsights: false,
+            onDismiss: { hub.dismiss(sessionId: $0) }
+        )
             .padding(.horizontal, 18)
             .colorScheme(.dark)
             .frame(width: Self.expandedWidth)
@@ -420,6 +425,9 @@ struct SessionListView: View {
     /// reveals empty space beside the hardware cutout. The menu bar card has
     /// no cap, so it keeps the inline header.
     var showsInsights = true
+    /// Clear a finished session from the panel (the row "×"). Supplied by the
+    /// notch; nil in the menu bar, where rows have no dismiss affordance.
+    var onDismiss: ((String) -> Void)? = nil
 
     private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
@@ -469,7 +477,8 @@ struct SessionListView: View {
                         VStack(spacing: 0) {
                             SessionRow(
                                 session: session,
-                                celebrating: hub.celebrating.contains(session.id)
+                                celebrating: hub.celebrating.contains(session.id),
+                                onDismiss: onDismiss.map { dismiss in { dismiss(session.id) } }
                             )
                             DelegatedRows(session: session)
                         }
@@ -1033,7 +1042,13 @@ enum SessionMeta {
 struct SessionRow: View {
     let session: AgentSession
     var celebrating = false
+    var onDismiss: (() -> Void)? = nil
     @State private var hovering = false
+
+    /// Finished rows can be cleared from the panel; live ones cannot.
+    private var isDismissible: Bool {
+        onDismiss != nil && session.status == .idle
+    }
 
     private var statusColor: Color { Palette.status(session.status) }
 
@@ -1130,9 +1145,26 @@ struct SessionRow: View {
             if let terminal = SessionMeta.terminalLabel(session) {
                 Chip(text: terminal)
             }
-            Text(SessionMeta.elapsed(session))
-                .font(.system(size: 10))
-                .foregroundStyle(Palette.inkTertiary)
+            // Hovering a finished row swaps its elapsed time for a dismiss
+            // button, so ghosts can be cleared without waiting on retention.
+            if isDismissible, hovering {
+                Button(action: { onDismiss?() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .frame(width: 18, height: 18)
+                        .background(
+                            Circle().fill(Color.white.opacity(0.10))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss this session")
+            } else {
+                Text(SessionMeta.elapsed(session))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.inkTertiary)
+            }
         }
         .padding(.horizontal, 8)
         .frame(height: NotchView.rowHeight)
