@@ -677,7 +677,7 @@ struct AgentLogo: View {
     /// Agent key (as stored on the session) → bundled `logo-<slug>.png`.
     static func slug(for agent: String) -> String? {
         switch agent {
-        case "claude-code": return "claude"
+        case "claude-code", "claude": return "claude"
         case "codex": return "codex"
         case "grok": return "grok"
         case "cursor": return "cursor"
