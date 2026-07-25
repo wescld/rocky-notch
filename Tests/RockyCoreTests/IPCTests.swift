@@ -145,12 +145,15 @@ final class IPCTests: XCTestCase {
         )
         XCTAssertEqual(denyRoot["permission"] as? String, "deny")
         XCTAssertEqual(denyRoot["continue"] as? Bool, false)
-        XCTAssertEqual(denyRoot["userMessage"] as? String, "Denied in Rocky")
+        // Cursor reads snake_case; camelCase keys are silently dropped and the
+        // agent gets a generic "blocked by a hook" instead of Rocky's reason.
+        XCTAssertEqual(denyRoot["user_message"] as? String, "Denied in Rocky")
         XCTAssertEqual(
-            denyRoot["agentMessage"] as? String,
+            denyRoot["agent_message"] as? String,
             "The user denied this action in Rocky."
         )
-        XCTAssertNil(denyRoot["user_message"])
+        XCTAssertNil(denyRoot["userMessage"])
+        XCTAssertNil(denyRoot["agentMessage"])
 
         let ask = try XCTUnwrap(PermissionRequestOutput.stdout(for: .ask, agent: "cursor"))
         let askRoot = try XCTUnwrap(
@@ -158,7 +161,8 @@ final class IPCTests: XCTestCase {
         )
         XCTAssertEqual(askRoot["permission"] as? String, "ask")
         XCTAssertEqual(askRoot["continue"] as? Bool, true)
-        XCTAssertEqual(askRoot["userMessage"] as? String, "Approve in Rocky or Cursor")
+        XCTAssertEqual(askRoot["user_message"] as? String, "Approve in Rocky or Cursor")
+        XCTAssertNil(askRoot["userMessage"])
 
         XCTAssertNil(PermissionRequestOutput.stdout(for: .passthrough, agent: "cursor"))
     }

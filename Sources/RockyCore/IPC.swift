@@ -99,8 +99,8 @@ public enum PermissionRequestOutput {
     ///
     /// Claude Code and Codex use `hookSpecificOutput` + `behavior`.
     /// Grok's PreToolUse hooks expect `{"decision":"allow|deny"}`.
-    /// Cursor expects camelCase:
-    /// `{"continue":bool,"permission":"allow|deny|ask","userMessage":…,"agentMessage":…}`.
+    /// Cursor expects snake_case:
+    /// `{"continue":bool,"permission":"allow|deny|ask","user_message":…,"agent_message":…}`.
     public static func stdout(
         for decision: Decision,
         agent: String = "claude-code",
@@ -181,17 +181,20 @@ public enum PermissionRequestOutput {
     }
 
     private static func cursorStdout(for decision: Decision) -> Data? {
-        // Cursor docs (GitButler hooks deep dive): camelCase keys + continue.
+        // https://cursor.com/docs/agent/hooks — snake_case keys + continue.
+        // Cursor ignores camelCase spellings: the permission still applies, but
+        // the messages are dropped and the agent sees a generic "blocked by a
+        // hook" instead of Rocky's reason.
         var object: [String: JSONValue] = [
             "permission": .string(decision.rawValue),
             "continue": .bool(decision != .deny),
         ]
         switch decision {
         case .deny:
-            object["userMessage"] = .string("Denied in Rocky")
-            object["agentMessage"] = .string("The user denied this action in Rocky.")
+            object["user_message"] = .string("Denied in Rocky")
+            object["agent_message"] = .string("The user denied this action in Rocky.")
         case .ask:
-            object["userMessage"] = .string("Approve in Rocky or Cursor")
+            object["user_message"] = .string("Approve in Rocky or Cursor")
         case .allow, .passthrough:
             break
         }

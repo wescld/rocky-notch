@@ -127,7 +127,7 @@ struct AgentIntegration {
             beforeShellExecution / beforeMCPExecution (approval gate), \
             beforeReadFile / afterFileEdit (observe; no edit block API), \
             stop (idle). File edits cannot be gated — Cursor has no beforeWrite. \
-            Decisions return {continue, permission, userMessage, agentMessage}.
+            Decisions return {continue, permission, user_message, agent_message}.
             """
         )
     }
