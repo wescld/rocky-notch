@@ -9,37 +9,40 @@ struct NotchView: View {
     @ObservedObject var state: NotchUIState
     var notchWidth: CGFloat = 200
     var notchHeight: CGFloat = 37
+    /// Reports the expanded content's true height to the window controller.
+    /// A closure rather than published state: measurement happens during a view
+    /// update, and mutating an `@ObservableObject` from there is the reentrancy
+    /// the controller's own subscription already goes out of its way to avoid.
+    var onContentHeight: (CGFloat) -> Void = { _ in }
+    /// Lets the session count travel between the resting and open cap layouts.
+    @Namespace private var capNamespace
 
-    static let expandedWidth: CGFloat = 430
+    static let expandedWidth: CGFloat = 560
     static let rowHeight: CGFloat = 40
-    static let featuredHeight: CGFloat = 66
-    static let cardHeight: CGFloat = 118
     static let wingWidth: CGFloat = 78
 
-    static func size(
-        expanded: Bool,
-        sessionCount: Int,
-        hasPending: Bool,
+    /// The pill fused with the notch. Also the cap of the expanded island:
+    /// this size is identical in every state, which is what keeps the top edge
+    /// from ever appearing to move.
+    static func capSize(notchWidth: CGFloat, notchHeight: CGFloat) -> CGSize {
+        // Slightly taller than the physical notch so the glass rim on the
+        // bottom edge is fully visible below the hardware cutout.
+        CGSize(width: notchWidth + wingWidth * 2, height: notchHeight + 5)
+    }
+
+    /// Panel size for a given measured content height. The height is measured,
+    /// never guessed: a pending card's height depends on its diff, its question
+    /// count and how its chips wrap, and every formula that tried to predict it
+    /// silently clipped the overflow.
+    static func expandedSize(
+        contentHeight: CGFloat,
         notchWidth: CGFloat,
-        notchHeight: CGFloat,
-        pendingDiffLines: Int = 0,
-        pendingOptionRows: Int = 0
+        notchHeight: CGFloat
     ) -> CGSize {
-        if !expanded {
-            // Slightly taller than the physical notch so the glass rim on the
-            // bottom edge is fully visible below the hardware cutout.
-            return CGSize(width: notchWidth + wingWidth * 2, height: notchHeight + 5)
-        }
-        let card = hasPending
-            ? cardHeight + CGFloat(pendingDiffLines) * 21 + CGFloat(pendingOptionRows) * 32
-            : 26
-        let rows = sessionCount == 0
-            ? rowHeight + 84
-            : CGFloat(sessionCount) * rowHeight + card + 20 + 40
-        let height = notchHeight + rows + 18
+        let cap = capSize(notchWidth: notchWidth, notchHeight: notchHeight)
         return CGSize(
-            width: max(expandedWidth, notchWidth + wingWidth * 2),
-            height: min(height, 520)
+            width: max(expandedWidth, cap.width),
+            height: cap.height + max(0, contentHeight)
         )
     }
 
@@ -61,20 +64,90 @@ struct NotchView: View {
         hub.sessions.contains { $0.status == .running }
     }
 
+    private var cap: CGSize {
+        Self.capSize(notchWidth: notchWidth, notchHeight: notchHeight)
+    }
+
+    /// How much of the panel's height the silhouette currently occupies.
+    private func visibleFraction(of total: CGFloat) -> CGFloat {
+        guard total > 0 else { return 1 }
+        let visible = min(
+            cap.height + max(0, state.expandedHeight - cap.height) * state.revealProgress,
+            total
+        )
+        return max(0.01, visible / total)
+    }
+
+    private var silhouette: NotchShape {
+        NotchShape(
+            progress: state.revealProgress,
+            capWidth: cap.width,
+            capHeight: cap.height,
+            expandedHeight: state.expandedHeight
+        )
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            if state.expanded {
-                expandedContent
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                collapsedContent
-                    .transition(.opacity)
+        let shape = silhouette
+        // GeometryReader anchors its content at the top-left and lets it
+        // overflow, which is exactly what the reveal needs. A plain
+        // `.frame(alignment: .top)` does not: the window resize and SwiftUI's
+        // layout pass never land on the same frame, and while the panel is
+        // still collapsed the stack gets a shorter proposal, spills in both
+        // directions and rides up over the cap for a frame or two.
+        GeometryReader { _ in
+            VStack(spacing: 0) {
+                // The wings never unmount: Rocky and the session chip live in
+                // the cap in every state, so opening the panel grows a console
+                // underneath them instead of swapping one surface for another.
+                capContent
+                    .frame(height: cap.height)
+                if state.contentMounted {
+                    expandedContent
+                        // The mask clips drawing, not hit-testing: without this
+                        // a click in the not-yet-revealed region would hit an
+                        // Approve button the user cannot see.
+                        .allowsHitTesting(state.phase == .expanded)
+                }
             }
+            // Natural height, never the height the panel currently happens
+            // to be, so the console is laid out once and simply revealed.
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(surface)
-        .animation(.spring(duration: 0.32, bounce: 0.1), value: state.expanded)
-        .animation(.spring(duration: 0.32, bounce: 0.1), value: hub.sessions.map(\.id))
+        .background(shape.fill(.black))
+        .clipShape(shape)
+        // Liquid-glass lip: a light rim that only exists on the lateral
+        // and bottom edges (clear at the top, so the fusion with the
+        // physical notch stays seamless) — reads as a glass edge
+        // catching light.
+        .overlay(
+            GeometryReader { geo in
+                // The gradient spans the *visible* silhouette, not the panel
+                // bounds. Measured over the full height, the bottom rim would
+                // sample the middle of the ramp while the island is still
+                // growing and the lip would fade in instead of tracking the
+                // bottom edge.
+                shape.strokeBorder(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .white.opacity(0.16), location: 0.10),
+                            .init(color: .white.opacity(0.20), location: 0.55),
+                            .init(color: .white.opacity(0.30), location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: UnitPoint(x: 0.5, y: visibleFraction(of: geo.size.height))
+                    ),
+                    lineWidth: 1
+                )
+            }
+        )
+        .compositingGroup()
+        // Hover only counts inside the silhouette, never in the transparent
+        // area the window keeps around it while the island is still growing.
+        .contentShape(shape)
         .onHover { hovering in
             // Expansion/collapse authority lives in NotchWindowController;
             // the view only reports raw hover.
@@ -82,77 +155,197 @@ struct NotchView: View {
         }
     }
 
-    private var surface: some View {
-        let shape = state.expanded
-            ? NotchShape(topRadius: 14, bottomRadius: 18, convexTop: true)
-            : NotchShape(topRadius: 7, bottomRadius: 18)
-        return ZStack {
-            shape.fill(.black)
-            // Liquid-glass lip: a light rim that only exists on the lateral
-            // and bottom edges (clear at the top, so the fusion with the
-            // physical notch stays seamless) — reads as a glass edge
-            // catching light.
-            shape.strokeBorder(
-                LinearGradient(
-                    stops: [
-                        .init(color: .clear, location: 0),
-                        .init(color: .white.opacity(0.16), location: 0.10),
-                        .init(color: .white.opacity(0.20), location: 0.55),
-                        .init(color: .white.opacity(state.expanded ? 0.34 : 0.28), location: 1),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ),
-                lineWidth: 1
-            )
-        }
-        .compositingGroup()
+    // MARK: - Cap
+
+    /// Width of the cap strip right now. It tracks the silhouette so the
+    /// wings ride the growing edges instead of staying bunched in the middle.
+    private var capBarWidth: CGFloat {
+        cap.width + max(0, Self.expandedWidth - cap.width) * state.revealProgress
     }
 
-    // MARK: - Collapsed
+    /// The stats only exist in the space the opening reveals, so they come in
+    /// late and never crowd the closed pill.
+    private var insightsOpacity: Double {
+        Double(max(0, min(1, (state.revealProgress - 0.55) / 0.35)))
+    }
 
-    private var collapsedContent: some View {
-        HStack {
-            HStack(spacing: 9) {
-                if needsAttention {
-                    RockySprite(state: "rocky-alert", fallback: "south", size: 20)
-                } else if !hub.celebrating.isEmpty {
-                    RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 22)
-                        .transition(.scale.combined(with: .opacity))
-                } else if anyRunning {
-                    RockyAnimatedSprite(size: 20)
-                } else {
-                    RockySprite(state: "rocky-sleeping", fallback: "south", size: 20)
-                }
+    /// Usable width on each side of the hardware cutout. Anything drawn behind
+    /// the notch simply does not exist to the user — the framebuffer keeps it,
+    /// the panel does not show it — so each wing is clamped to the strip beside
+    /// it and drops its optional parts rather than sliding under the cutout.
+    private var sideWidth: CGFloat {
+        max(0, (capBarWidth - notchWidth) / 2 - capInset)
+    }
+
+    /// Breathing room measured from the *visible* wall, not the panel edge.
+    /// The concave flare carves inward and grows as the island opens, so a
+    /// constant padding leaves Rocky flush against the edge once open.
+    private var capInset: CGFloat {
+        let flare = NotchShape.restFlare
+            + (NotchShape.openFlare - NotchShape.restFlare) * state.revealProgress
+        return flare + Self.capPadding
+    }
+
+    /// Tighter than the body's, to buy the stats a few points beside a wide
+    /// hardware cutout.
+    static let capPadding: CGFloat = 12
+
+    /// At rest the cap is the pill it always was — Rocky on one wing, the count
+    /// on the other, the hardware notch between them. The stats layout only
+    /// belongs to the opened island, and `matchedGeometryEffect` carries the
+    /// count across so it travels instead of jumping.
+    private var capContent: some View {
+        Group {
+            if state.revealProgress < 0.5 {
+                restingWings
+            } else {
+                openWings
             }
+        }
+        .frame(width: capBarWidth)
+        .frame(maxHeight: .infinity)
+    }
+
+    private var restingWings: some View {
+        HStack(spacing: 0) {
+            rockyWing
+            Spacer(minLength: 8)
+            countChip
+                .matchedGeometryEffect(id: "count", in: capNamespace)
+                .padding(.trailing, capInset)
+        }
+    }
+
+    private var openWings: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 9) {
+                rockyWing
+                // Sheds the work time, then the tokens, on narrower notches.
+                ViewThatFits(in: .horizontal) {
+                    capStats(includeWork: true)
+                    capStats(includeWork: false)
+                    EmptyView()
+                }
+                .transition(.opacity)
+            }
+            .fixedSize()
+            .frame(width: sideWidth + capInset, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            // Account limits and the count share the right strip; the count
+            // keeps the wing it holds at rest, so it never travels on opening.
+            // The middle is deliberately left empty — the cutout covers it.
+            HStack(spacing: 9) {
+                ViewThatFits(in: .horizontal) {
+                    capUsage(compact: false)
+                    capUsage(compact: true)
+                    EmptyView()
+                }
+                .transition(.opacity)
+                countChip
+                    .matchedGeometryEffect(id: "count", in: capNamespace)
+            }
+            .fixedSize()
+            .padding(.trailing, capInset)
+            .frame(width: sideWidth + capInset, alignment: .trailing)
+        }
+    }
+
+    private var rockyWing: some View {
+        rockyGlyph
             .pokeable()
             .animation(.spring(duration: 0.3, bounce: 0.5), value: hub.celebrating)
-            .padding(.leading, 18)
+            .padding(.leading, capInset)
             .padding(.bottom, 1)
-            .frame(width: Self.wingWidth, alignment: .leading)
+            // Centred in the cap strip: without this the sprite sits flush with
+            // the top edge and its head gets clipped by the screen.
             .frame(maxHeight: .infinity, alignment: .center)
+    }
 
-            Spacer()
+    @ViewBuilder
+    private var rockyGlyph: some View {
+        if needsAttention {
+            RockySprite(state: "rocky-alert", fallback: "south", size: 20)
+        } else if !hub.celebrating.isEmpty {
+            RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 22)
+                .transition(.scale.combined(with: .opacity))
+        } else if anyRunning {
+            RockyAnimatedSprite(size: 20)
+        } else {
+            RockySprite(state: "rocky-sleeping", fallback: "south", size: 20)
+        }
+    }
 
-            // Session count chip; amber while something needs the user.
-            HStack(spacing: 6) {
-                if !hub.sessions.isEmpty {
-                    Text("\(hub.sessions.count)")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(needsAttention ? Color.black : Palette.inkSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(needsAttention ? Palette.amber : Color.white.opacity(0.12))
-                        )
-                        .breathing(period: needsAttention ? 1.0 : 100)
+    /// Session count chip; amber while something needs the user.
+    @ViewBuilder
+    private var countChip: some View {
+        if !hub.sessions.isEmpty {
+            Text("\(hub.sessions.count)")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(needsAttention ? Color.black : Palette.inkSecondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(needsAttention ? Palette.amber : Color.white.opacity(0.12))
+                )
+                .breathing(period: needsAttention ? 1.0 : 100)
+        }
+    }
+
+    /// Tokens burned and time actually worked, across tracked sessions.
+    @ViewBuilder
+    private func capStats(includeWork: Bool) -> some View {
+        let tokens = SessionMeta.tokens(totalTokens)
+        let work = includeWork ? SessionMeta.workTime(totalWork) : nil
+        if tokens != nil || work != nil {
+            HStack(spacing: 5) {
+                TokenIcon(size: 11)
+                if let tokens {
+                    Text(tokens).foregroundStyle(Palette.green)
+                }
+                if let work {
+                    if tokens != nil {
+                        Text("·").foregroundStyle(Palette.inkTertiary)
+                    }
+                    Text(work).foregroundStyle(Palette.inkSecondary)
                 }
             }
-            .padding(.trailing, 18)
-            .frame(width: Self.wingWidth, alignment: .trailing)
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .fixedSize()
         }
-        .frame(maxHeight: .infinity)
+    }
+
+    /// `compact` drops the Codex window, keeping the Claude one, when the
+    /// strip beside the notch cannot hold both.
+    @ViewBuilder
+    private func capUsage(compact: Bool) -> some View {
+        let claude = Preferences.showAccountUsage ? hub.claudeUsage : nil
+        let codex = (Preferences.showAccountUsage && !compact) ? hub.codexUsage : nil
+        HStack(spacing: 5) {
+            if let five = claude?.fiveHour {
+                HStack(spacing: 3) {
+                    AgentLogo(agent: "claude-code", size: 11)
+                    Text("\(five.roundedUsedPercentage)% 5h")
+                }
+                .foregroundStyle(five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
+                .help("Claude account usage")
+            }
+            if let primary = codex?.primary {
+                if claude?.fiveHour != nil {
+                    Text("·").foregroundStyle(Palette.inkTertiary)
+                }
+                HStack(spacing: 3) {
+                    AgentLogo(agent: "codex", size: 11)
+                    Text("\(primary.roundedUsedPercentage)% \(primary.label)")
+                }
+                .foregroundStyle(primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
+                .help("Codex account usage")
+            }
+        }
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .fixedSize()
     }
 
     // MARK: - Expanded
@@ -162,94 +355,29 @@ struct NotchView: View {
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
     private var expandedContent: some View {
-        SessionListView(hub: hub, attention: state.attention)
-            .padding(.top, 28)
-            .padding(.horizontal, 12)
+        SessionListView(hub: hub, attention: state.attention, showsInsights: false)
+            .padding(.horizontal, 18)
             .colorScheme(.dark)
+            .frame(width: Self.expandedWidth)
+            // Report the ideal height rather than accepting whatever the panel
+            // currently offers — otherwise the measurement would echo back the
+            // window size and the panel could never learn it is too short.
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                onContentHeight(height)
+            }
     }
 }
-
-/// The real notch silhouette: concave flares at the top (where the panel
-/// meets the menu bar, like the hardware cutout) and convex rounded bottom
-/// corners. The top edge stays straight for seamless fusion.
-struct NotchShape: InsettableShape {
-    var topRadius: CGFloat
-    var bottomRadius: CGFloat
-    /// false = concave flare (fused with the hardware notch, collapsed);
-    /// true = regular convex rounding (floating card, expanded).
-    var convexTop: Bool = false
-    /// Amount the path is pulled inward on every edge. Used by `strokeBorder`
-    /// so the rim is drawn fully inside the bounds — a centered `stroke` would
-    /// clip its outer half against the window and read as a broken border.
-    var inset: CGFloat = 0
-
-    func inset(by amount: CGFloat) -> NotchShape {
-        var copy = self
-        copy.inset += amount
-        return copy
-    }
-
-    func path(in rect: CGRect) -> Path {
-        let rect = rect.insetBy(dx: inset, dy: inset)
-        var p = Path()
-        let t = topRadius
-        let b = bottomRadius
-        if convexTop {
-            p.move(to: CGPoint(x: rect.minX + t, y: rect.minY))
-            p.addLine(to: CGPoint(x: rect.maxX - t, y: rect.minY))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.maxX, y: rect.minY + t),
-                control: CGPoint(x: rect.maxX, y: rect.minY)
-            )
-            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - b))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.maxX - b, y: rect.maxY),
-                control: CGPoint(x: rect.maxX, y: rect.maxY)
-            )
-            p.addLine(to: CGPoint(x: rect.minX + b, y: rect.maxY))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.minX, y: rect.maxY - b),
-                control: CGPoint(x: rect.minX, y: rect.maxY)
-            )
-            p.addLine(to: CGPoint(x: rect.minX, y: rect.minY + t))
-            p.addQuadCurve(
-                to: CGPoint(x: rect.minX + t, y: rect.minY),
-                control: CGPoint(x: rect.minX, y: rect.minY)
-            )
-            p.closeSubpath()
-            return p
-        }
-        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.minX + t, y: rect.minY + t),
-            control: CGPoint(x: rect.minX + t, y: rect.minY)
-        )
-        p.addLine(to: CGPoint(x: rect.minX + t, y: rect.maxY - b))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.minX + t + b, y: rect.maxY),
-            control: CGPoint(x: rect.minX + t, y: rect.maxY)
-        )
-        p.addLine(to: CGPoint(x: rect.maxX - t - b, y: rect.maxY))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.maxX - t, y: rect.maxY - b),
-            control: CGPoint(x: rect.maxX - t, y: rect.maxY)
-        )
-        p.addLine(to: CGPoint(x: rect.maxX - t, y: rect.minY + t))
-        p.addQuadCurve(
-            to: CGPoint(x: rect.maxX, y: rect.minY),
-            control: CGPoint(x: rect.maxX - t, y: rect.minY)
-        )
-        p.closeSubpath()
-        return p
-    }
-}
-
 
 /// The session console: insights header + rows + pending cards. Shared by
 /// the notch panel and the menu bar mode.
 struct SessionListView: View {
     @ObservedObject var hub: AgentHub
     var attention: NotchAttention = .list
+    /// The notch shows these in its cap strip instead, where the opening
+    /// reveals empty space beside the hardware cutout. The menu bar card has
+    /// no cap, so it keeps the inline header.
+    var showsInsights = true
 
     private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
@@ -262,7 +390,8 @@ struct SessionListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Color.clear.frame(height: 6)
-            if !hub.sessions.isEmpty || hub.claudeUsage != nil || hub.codexUsage != nil {
+            if showsInsights,
+               !hub.sessions.isEmpty || hub.claudeUsage != nil || hub.codexUsage != nil {
                 insightsHeader
             }
             if let done = completionSession {
@@ -1008,7 +1137,26 @@ struct QuestionPicker: View {
         request.questions[min(index, request.questions.count - 1)]
     }
 
+    /// Every question is laid out, only the current one is shown. The stack
+    /// therefore reserves the tallest question's height for the whole sequence,
+    /// so the card never resizes under the cursor while the user is clicking
+    /// through options — and it does it by real layout, not by counting rows.
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(request.questions.enumerated()), id: \.offset) { position, question in
+                questionView(question, at: position)
+                    .opacity(position == index ? 1 : 0)
+                    .allowsHitTesting(position == index)
+                    .accessibilityHidden(position != index)
+            }
+        }
+        .animation(.easeInOut(duration: 0.18), value: index)
+    }
+
+    private func questionView(
+        _ question: AskUserQuestionRequest.Question,
+        at position: Int
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(question.text)
@@ -1017,14 +1165,14 @@ struct QuestionPicker: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
                 if request.questions.count > 1 {
-                    Text("\(index + 1)/\(request.questions.count)")
+                    Text("\(position + 1)/\(request.questions.count)")
                         .font(.system(size: 9.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(Palette.inkTertiary)
                 }
             }
-            ForEach(Array(question.options.enumerated()), id: \.offset) { position, option in
+            ForEach(Array(question.options.enumerated()), id: \.offset) { row, option in
                 QuestionOptionRow(
-                    number: position + 1,
+                    number: row + 1,
                     option: option,
                     selected: selected.contains(option.label)
                 ) {
@@ -1039,7 +1187,7 @@ struct QuestionPicker: View {
                 .opacity(selected.isEmpty ? 0.4 : 1)
             }
         }
-        .animation(.easeInOut(duration: 0.18), value: index)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func choose(_ option: AskUserQuestionRequest.Option) {
