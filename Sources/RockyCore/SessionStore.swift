@@ -86,6 +86,16 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// `status == .waitingInput` never happens: the two move together.
     public var waitingInputReason: WaitingInputReason?
 
+    /// Live activity (a tool call landing) outranks a wait we were told about
+    /// earlier: the agent cannot be blocked on the user and running a tool at
+    /// the same time. Only clears an input wait — a pending permission is a
+    /// live card the user still has to decide, so it stays.
+    mutating func clearWaitForLiveActivity() {
+        guard status == .waitingInput else { return }
+        waitingInputReason = nil
+        status = .running
+    }
+
     public var projectName: String {
         if let title, !title.isEmpty { return title }
         guard let cwd else { return "session" }
@@ -248,6 +258,9 @@ public struct SessionStore: Equatable, Sendable {
             // up until the decision timeout.
             session.pending = nil
             if session.status == .waitingPermission { session.status = .running }
+            // Same reasoning for an explicit wait: the tool ran, so the block
+            // is over even though no prompt event told us so.
+            session.clearWaitForLiveActivity()
             // Kimi / OpenCode have no transcript for Rocky to tail; live
             // activity comes from PostToolUse (plugin bridge or hooks).
             if envelope.agent == "kimi-code" || envelope.agent == "opencode",
@@ -303,6 +316,12 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func setLastAction(_ action: String, sessionId: String) {
         sessions[sessionId]?.lastAction = action
+        // A fresh tool call in the transcript is proof the agent is working, so
+        // whatever it was blocked on got answered somewhere we cannot see —
+        // approving a permission or picking an option at the terminal prompt
+        // fires no UserPromptSubmit, which used to leave the row amber for the
+        // rest of the session while its tokens ticked up.
+        sessions[sessionId]?.clearWaitForLiveActivity()
     }
 
     public mutating func addTokens(_ tokens: Int, sessionId: String) {

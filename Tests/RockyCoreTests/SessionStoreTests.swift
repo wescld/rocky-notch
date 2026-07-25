@@ -43,14 +43,37 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.status, .running)
     }
 
-    func testPostToolUseWithoutPendingLeavesStatusAlone() {
+    func testPostToolUseEndsAnInputWait() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
         store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
         XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
 
+        // The user answered at the terminal, which fires no UserPromptSubmit.
+        // The tool running is the only evidence we get that the wait is over.
         store.apply(envelope("PostToolUse", toolName: "Read"), at: t0 + 2)
-        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+        XCTAssertEqual(store.sessions["s1"]?.status, .running)
+        XCTAssertNil(store.sessions["s1"]?.waitingInputReason)
+    }
+
+    func testTranscriptActivityEndsAnInputWait() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 1)
+
+        store.setLastAction("Bash: swift build", sessionId: "s1")
+        XCTAssertEqual(store.sessions["s1"]?.status, .running)
+        XCTAssertNil(store.sessions["s1"]?.waitingInputReason)
+    }
+
+    func testTranscriptActivityLeavesAPendingPermissionUp() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("PermissionRequest", toolName: "Bash"), at: t0 + 1)
+
+        store.setLastAction("Read: Package.swift", sessionId: "s1")
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingPermission)
+        XCTAssertNotNil(store.sessions["s1"]?.pending)
     }
 
     func testJumpTargetMergedFromEnvelope() {
