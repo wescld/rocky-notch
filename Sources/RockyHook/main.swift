@@ -116,9 +116,21 @@ if agent == "cursor",
       )
   }
 
+  // Kimi's Stop payload has no `last_assistant_message`, so the handoff — and
+  // with it "the agent ended by asking you something" — would be invisible for
+  // Kimi alone. Recover it from the session log Kimi writes anyway. Best-effort
+  // by construction: if it cannot be read, the event goes out unchanged and the
+  // session reads "done", which is the behaviour without this.
+  var outgoingEvent = event
+  if agent == "kimi-code", event.kind == .stop, event.lastAssistantMessage == nil,
+     let closing = KimiTranscript.lastAssistantMessage(sessionId: event.sessionId) {
+      debugLog("kimi closing recovered (\(closing.count) chars)")
+      outgoingEvent = event.withLastAssistantMessage(closing)
+  }
+
   let envelope = HookEnvelope(
       agent: agent,
-      event: event,
+      event: outgoingEvent,
       agentProcessPid: agentPid,
       jumpTarget: jump
   )
