@@ -446,6 +446,26 @@ final class NotchWindowController {
             // layout that no longer exists.
             self.hasFreshMeasurement = false
             self.applyFrame(self.capSize(), on: self.targetScreen)
+            self.settleHoverAfterShrink()
+        }
+    }
+
+    /// Reconcile hover with the real pointer after the panel shrinks.
+    ///
+    /// The window just moved out from under the pointer, and AppKit sends no
+    /// mouse-exit to a view that was pulled away rather than left: SwiftUI's
+    /// last word stays `hovering = true` with nothing able to contradict it,
+    /// since the pointer is no longer over the panel at all. The next sync then
+    /// reads that stale flag as intent and reopens the console from empty
+    /// space. Ask where the pointer actually is instead of trusting the last
+    /// event we happened to receive.
+    private func settleHoverAfterShrink() {
+        let inside = mouseInsidePresentedIsland()
+        if state.hovering != inside { state.hovering = inside }
+        if !inside {
+            hoverConfirmed = false
+            hoverIntentTimer?.invalidate()
+            hoverIntentTimer = nil
         }
     }
 
