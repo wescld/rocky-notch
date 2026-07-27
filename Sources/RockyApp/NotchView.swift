@@ -218,8 +218,13 @@ struct NotchView: View {
 
     private var openWings: some View {
         HStack(spacing: 0) {
+            // Same rule as the right strip: `fixedSize` pins Rocky, never the
+            // row, or the ViewThatFits beside him is offered unbounded width
+            // and stops shedding. Horizontal only — he still stretches
+            // vertically to stay centred in the cap.
             HStack(spacing: 9) {
                 rockyWing
+                    .fixedSize(horizontal: true, vertical: false)
                 // Sheds the work time, then the tokens, on narrower notches.
                 ViewThatFits(in: .horizontal) {
                     capStats(includeWork: true)
@@ -228,7 +233,6 @@ struct NotchView: View {
                 }
                 .transition(.opacity)
             }
-            .fixedSize()
             .frame(width: sideWidth + capInset, alignment: .leading)
 
             Spacer(minLength: 0)
@@ -236,6 +240,11 @@ struct NotchView: View {
             // Account limits and the count share the right strip; the count
             // keeps the wing it holds at rest, so it never travels on opening.
             // The middle is deliberately left empty — the cutout covers it.
+            // `fixedSize` belongs on the count alone, never on the row: applied
+            // to the row it proposes an unbounded width to its children, and a
+            // ViewThatFits offered unbounded width concludes its widest option
+            // fits every time. It would never degrade, and the overflow would
+            // spill past the trailing alignment straight under the cutout.
             HStack(spacing: 9) {
                 ViewThatFits(in: .horizontal) {
                     capUsage(.full)
@@ -245,9 +254,9 @@ struct NotchView: View {
                 }
                 .transition(.opacity)
                 countChip
+                    .fixedSize()
                     .matchedGeometryEffect(id: "count", in: capNamespace)
             }
-            .fixedSize()
             .padding(.trailing, capInset)
             .frame(width: sideWidth + capInset, alignment: .trailing)
         }
