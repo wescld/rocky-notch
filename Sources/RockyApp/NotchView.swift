@@ -248,8 +248,8 @@ struct NotchView: View {
             HStack(spacing: 9) {
                 ViewThatFits(in: .horizontal) {
                     capUsage(.full)
-                    capUsage(.claudeOnly)
-                    capUsage(.sessionOnly)
+                    capUsage(.hottestAgent)
+                    capUsage(.hottestSession)
                     EmptyView()
                 }
                 .transition(.opacity)
@@ -328,25 +328,42 @@ struct NotchView: View {
     }
 
     /// How much of the account strip the space beside the notch can hold.
-    /// Sheds Codex first, then the weekly figures — the session reading is the
-    /// last thing to go, and what remains is what the cap showed before the
-    /// weekly windows arrived.
+    /// Sheds an agent first, then the weekly figures. What survives a squeeze
+    /// is whichever account is closest to running out, never a fixed one:
+    /// dropping a spent account to keep a calm one would hide the very figure
+    /// the colour rule exists to raise.
     private enum UsageDensity {
         case full
-        case claudeOnly
-        case sessionOnly
+        case hottestAgent
+        case hottestSession
     }
 
     @ViewBuilder
     private func capUsage(_ density: UsageDensity) -> some View {
         let showUsage = Preferences.showAccountUsage
         let claude = showUsage ? hub.claudeUsage : nil
-        let codex = (showUsage && density == .full) ? hub.codexUsage : nil
-        let weeklyFits = density != .sessionOnly
+        let codex = showUsage ? hub.codexUsage : nil
+        let claudeSession = claude?.fiveHour
+        let codexSession = codex?.primary
+        let weeklyFits = density != .hottestSession
+
+        // Rank by each account's own worst window, then let the ranking decide
+        // only who survives — never the running order. Chips that reshuffle as
+        // the figures drift would cost the glance-and-know the strip is for.
+        let bothFit = density == .full
+        let claudeKeeps = UsageHeat.keepsFirst(
+            claudeSession == nil
+                ? nil
+                : UsageHeat.peak([claudeSession?.usedPercentage, claude?.sevenDay?.usedPercentage]),
+            over: codexSession == nil
+                ? nil
+                : UsageHeat.peak([codexSession?.usedPercentage, codex?.secondary?.usedPercentage])
+        )
+
         HStack(spacing: 5) {
-            if let five = claude?.fiveHour {
+            if let claudeSession, bothFit || claudeKeeps {
                 AccountUsageChip(
-                    claude: five,
+                    claude: claudeSession,
                     weekly: weeklyFits ? claude?.sevenDay : nil
                 )
             }
@@ -354,9 +371,9 @@ struct NotchView: View {
             // with its own logo, which separates them well enough, and the
             // glyph costs more width than the strip beside a 209pt cutout can
             // spare once both windows show.
-            if let primary = codex?.primary {
+            if let codexSession, bothFit || !claudeKeeps {
                 AccountUsageChip(
-                    codex: primary,
+                    codex: codexSession,
                     weekly: weeklyFits ? codex?.secondary : nil
                 )
             }

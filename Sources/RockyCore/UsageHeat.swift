@@ -20,4 +20,23 @@ public enum UsageHeat {
             .compactMap { $0 }
             .contains { $0 >= amberThreshold }
     }
+
+    /// The highest of the given windows — how close this account is to running
+    /// out, whichever window gets there first. Nil when none reported.
+    public static func peak(_ usedPercentages: [Double?]) -> Double? {
+        usedPercentages.compactMap { $0 }.max()
+    }
+
+    /// Whether the first account keeps the space when only one reading fits.
+    ///
+    /// The hotter account wins: dropping a spent one to show a calm one hides
+    /// exactly the figure the amber rule exists to raise. An account that
+    /// reported nothing never wins — there would be no number to show. Ties go
+    /// to the first, so a strip hovering at the width boundary does not swap
+    /// its chip back and forth.
+    public static func keepsFirst(_ first: Double?, over second: Double?) -> Bool {
+        guard let second else { return true }
+        guard let first else { return false }
+        return first >= second
+    }
 }

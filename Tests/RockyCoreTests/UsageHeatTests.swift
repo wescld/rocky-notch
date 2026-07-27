@@ -30,4 +30,33 @@ final class UsageHeatTests: XCTestCase {
     func testNoWindowsAtAllIsNotHot() {
         XCTAssertFalse(UsageHeat.isHot([]))
     }
+
+    func testPeakTakesTheWindowClosestToRunningOut() {
+        XCTAssertEqual(UsageHeat.peak([12, 91]), 91)
+        XCTAssertEqual(UsageHeat.peak([91, 12]), 91)
+        XCTAssertEqual(UsageHeat.peak([nil, 42]), 42)
+    }
+
+    func testPeakOfNothingIsNil() {
+        XCTAssertNil(UsageHeat.peak([nil, nil]))
+        XCTAssertNil(UsageHeat.peak([]))
+    }
+
+    func testHotterAccountKeepsTheStrip() {
+        XCTAssertTrue(UsageHeat.keepsFirst(91, over: 12))
+        XCTAssertFalse(UsageHeat.keepsFirst(12, over: 91))
+    }
+
+    /// An account with nothing to report cannot win space it would leave empty.
+    func testSilentAccountNeverKeepsTheStrip() {
+        XCTAssertFalse(UsageHeat.keepsFirst(nil, over: 12))
+        XCTAssertTrue(UsageHeat.keepsFirst(12, over: nil))
+        XCTAssertTrue(UsageHeat.keepsFirst(nil, over: nil))
+    }
+
+    /// Ties hold still: a strip sitting on the width boundary must not swap its
+    /// chip back and forth as the figures drift.
+    func testTieKeepsTheFirstAccount() {
+        XCTAssertTrue(UsageHeat.keepsFirst(50, over: 50))
+    }
 }
