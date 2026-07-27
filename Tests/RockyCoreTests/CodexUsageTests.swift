@@ -129,6 +129,41 @@ final class CodexUsageTests: XCTestCase {
         XCTAssertEqual(CodexUsageLoader.windowLabel(minutes: 45), "45m")
     }
 
+    /// Windows resolve by key, never by position. An account reporting only a
+    /// secondary window used to surface its weekly figure as `primary`, so the
+    /// notch showed a week's spend where the session's belongs.
+    func testSecondaryOnlyWindowIsNotReportedAsPrimary() {
+        let snap = CodexUsageSnapshot(windows: [weeklyWindow(used: 71)])
+        XCTAssertNil(snap.primary)
+        XCTAssertEqual(snap.secondary?.roundedUsedPercentage, 71)
+    }
+
+    func testWindowsResolveByKeyRegardlessOfOrder() {
+        let snap = CodexUsageSnapshot(windows: [weeklyWindow(used: 71), sessionWindow(used: 38)])
+        XCTAssertEqual(snap.primary?.roundedUsedPercentage, 38)
+        XCTAssertEqual(snap.secondary?.roundedUsedPercentage, 71)
+    }
+
+    private func sessionWindow(used: Double) -> CodexUsageWindow {
+        CodexUsageWindow(
+            key: "primary",
+            label: "5h",
+            usedPercentage: used,
+            windowMinutes: 300,
+            resetsAt: nil
+        )
+    }
+
+    private func weeklyWindow(used: Double) -> CodexUsageWindow {
+        CodexUsageWindow(
+            key: "secondary",
+            label: "7d",
+            usedPercentage: used,
+            windowMinutes: 10_080,
+            resetsAt: nil
+        )
+    }
+
     func testIgnoresStaleRolloutsOutsideMaxAge() throws {
         let root = try makeRoot("stale")
         defer { try? FileManager.default.removeItem(at: root) }
