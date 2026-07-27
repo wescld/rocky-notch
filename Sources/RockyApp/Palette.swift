@@ -19,6 +19,9 @@ enum Palette {
     static func status(_ status: RockyCore.AgentSession.Status) -> Color {
         switch status {
         case .running: green
+        // Work is happening either way; what differs is who is doing it, and
+        // the ↳ chip on the row says that better than a third colour would.
+        case .delegating: green
         case .waitingPermission: amber
         case .waitingInput: amber
         case .idle: Color.white.opacity(0.35)

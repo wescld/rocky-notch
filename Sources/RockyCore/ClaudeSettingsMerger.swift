@@ -32,6 +32,12 @@ public enum ClaudeSettingsMerger {
         ("SessionEnd", false),
         ("UserPromptSubmit", false),
         ("Stop", false),
+        // The only event that reports what a parked session is still waiting
+        // on. Without it, a turn that ended by delegating reads as finished
+        // and never learns when its last agent came back. SubagentStart is
+        // deliberately not installed: everything it carries also arrives in
+        // the in-flight list, so it would be a hook for no new information.
+        ("SubagentStop", false),
         ("Notification", false),
         ("PostToolUse", false),
         ("PermissionRequest", true),

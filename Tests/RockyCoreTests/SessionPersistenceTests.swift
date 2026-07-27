@@ -38,6 +38,57 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertEqual(s.task, "fix the bug")
     }
 
+    /// The handoff is meant to outlive a bare "done" row by a quarter of an
+    /// hour; dropping it from the snapshot made a relaunch inside that window
+    /// silently downgrade the row to "done · click to jump".
+    func testHandoffSurvivesTheRoundTrip() throws {
+        var session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .idle,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        session.lastAgentMessage = "Quer que eu commite?"
+        session.handoffAsksSomething = true
+
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.lastAgentMessage, "Quer que eu commite?")
+        XCTAssertEqual(restored.first?.handoffAsksSomething, true)
+    }
+
+    /// In-flight work is a claim about right now, and Rocky cannot vouch for it
+    /// across its own death — so a delegating session comes back as idle with
+    /// nothing to show, and the next Stop reports the truth.
+    func testDelegatingIsNotRestoredAsWork() throws {
+        var session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .delegating,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        session.backgroundTasks = [BackgroundTask(id: "ag1", kind: "subagent")]
+
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.status, .idle)
+        XCTAssertEqual(restored.first?.backgroundTasks, [])
+    }
+
     func testDropsStaleSessions() throws {
         var old = AgentSession(
             id: "old",

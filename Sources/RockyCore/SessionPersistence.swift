@@ -17,6 +17,12 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     public var tokens: Int
     public var activeSeconds: TimeInterval
     public var task: String?
+    /// The handoff outlives a bare "done" row by design
+    /// (`handoffRetentionTimeout`), so dropping it here made a relaunch inside
+    /// that window silently downgrade the row to "done · click to jump" and
+    /// lose the question ring. Optional so older snapshots still decode.
+    public var lastAgentMessage: String?
+    public var handoffAsksSomething: Bool?
 
     public init(from session: AgentSession) {
         id = session.id
@@ -34,6 +40,11 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         tokens = session.tokens
         activeSeconds = session.activeSeconds
         task = session.task
+        lastAgentMessage = session.lastAgentMessage
+        handoffAsksSomething = session.handoffAsksSomething
+        // `backgroundTasks` is deliberately absent: it is a claim about work
+        // running *right now*, and Rocky cannot vouch for it across its own
+        // death. The next Stop / SubagentStop reports the truth in full.
     }
 
     public func asSession(now: Date = Date()) -> AgentSession {
@@ -56,8 +67,16 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         session.tokens = tokens
         session.activeSeconds = activeSeconds
         session.task = task
+        session.lastAgentMessage = lastAgentMessage
+        session.handoffAsksSomething = handoffAsksSomething ?? false
         // Restored sessions are at best idle until a live hook re-attaches.
-        if session.status == .waitingPermission || session.status == .running {
+        // Delegating joins them: without the in-flight list there is nothing
+        // to show, and asserting work we cannot see is the very thing this
+        // status exists to stop. The restored handoff keeps the row honest
+        // ("here is where it left off") instead of claiming it finished.
+        if session.status == .waitingPermission
+            || session.status == .running
+            || session.status == .delegating {
             session.status = .idle
         }
         // Touch so prune doesn't instantly drop very old snapshots that
@@ -69,6 +88,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     private static func encodeStatus(_ status: AgentSession.Status) -> String {
         switch status {
         case .running: "running"
+        case .delegating: "delegating"
         case .waitingPermission: "waitingPermission"
         case .waitingInput: "waitingInput"
         case .idle: "idle"
@@ -78,6 +98,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     private static func decodeStatus(_ raw: String) -> AgentSession.Status {
         switch raw {
         case "running": .running
+        case "delegating": .delegating
         case "waitingPermission": .waitingPermission
         case "waitingInput": .waitingInput
         default: .idle

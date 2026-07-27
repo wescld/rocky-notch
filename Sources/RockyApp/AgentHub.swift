@@ -320,6 +320,7 @@ final class AgentHub: ObservableObject {
         if knownBefore.contains(sessionId), store.sessions[sessionId] == nil {
             transcripts.unwatch(sessionId: sessionId)
         }
+        resolveSubagentModels(sessionId: sessionId)
         markPersistDirty()
 
         let session = store.sessions[envelope.event.sessionId]
@@ -336,16 +337,64 @@ final class AgentHub: ObservableObject {
                 onPermissionRequest?(session)
             }
         case .stop:
-            // Stop also ends a turn the agent finished blocked on the user.
-            // Only a genuinely finished turn is "done" — chiming completion at
-            // someone whose answer is still pending would be a lie.
+            // Stop also ends a turn the agent finished blocked on the user,
+            // or one that parked on work it delegated. Only a genuinely
+            // finished turn is "done" — chiming completion at someone whose
+            // answer is still pending, or whose agents are still running,
+            // would be a lie.
             if let session, session.status == .idle {
+                onSessionIdle?(session)
+                onSessionCompleted?(session)
+                celebrate(sessionId: session.id)
+            }
+        case .subagentStop:
+            // A turn that parked is only over when its last child comes back.
+            // That is the completion the user has been waiting for, so it gets
+            // the announcement the premature Stop did not.
+            if let session, session.status == .idle, statusBefore == .delegating {
                 onSessionIdle?(session)
                 onSessionCompleted?(session)
                 celebrate(sessionId: session.id)
             }
         default:
             break
+        }
+    }
+
+    /// A subagent's model ("fable") appears in no hook payload — only in the
+    /// sidecar Claude Code writes beside its transcript. Reading it is what
+    /// lets the row say "Fable" instead of "general-purpose", so it is pure
+    /// enrichment: a miss leaves the agent type showing and nothing else.
+    private func resolveSubagentModels(sessionId: String) {
+        guard let session = store.sessions[sessionId],
+              let transcriptPath = session.transcriptPath
+        else { return }
+        let unresolved = session.backgroundTasks.filter { $0.isSubagent && $0.model == nil }
+        guard !unresolved.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            var resolved: [(id: String, model: String)] = []
+            for task in unresolved {
+                guard let path = RockyCore.BackgroundTask.metaPath(
+                          transcriptPath: transcriptPath,
+                          agentId: task.id
+                      ),
+                      let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                      let meta = SubagentMeta(data),
+                      let model = meta.model, !model.isEmpty
+                else { continue }
+                resolved.append((task.id, model))
+            }
+            let models = resolved
+            guard !models.isEmpty else { return }
+            await MainActor.run { [weak self] in
+                for entry in models {
+                    self?.store.setSubagentModel(
+                        entry.model,
+                        agentId: entry.id,
+                        sessionId: sessionId
+                    )
+                }
+            }
         }
     }
 
