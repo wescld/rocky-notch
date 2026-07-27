@@ -159,6 +159,34 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(s.jumpTarget?.workingDirectory, "/tmp/chimera")
     }
 
+    /// `codex resume` can restart a session in another directory, and only the
+    /// later `turn_context` says so. Keeping the birthplace named the wrong
+    /// project — and now also compares a live agent against a directory it
+    /// left, which reads as "not running there" and drops the row.
+    func testCodexFollowsTheSessionWhenItMovesDirectory() throws {
+        let root = tempRoot.appendingPathComponent(".codex/sessions/2026/04/03", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let rollout = root.appendingPathComponent(
+            "rollout-2026-04-03T03-20-00-019f2984-dbca-7fb0-8ce4-9d56dbb848d7.jsonl"
+        )
+        let body = """
+        {"timestamp":"2026-04-03T03:20:00Z","type":"session_meta","payload":{"session_id":"019f2984-dbca-7fb0-8ce4-9d56dbb848d7","id":"019f2984-dbca-7fb0-8ce4-9d56dbb848d7","timestamp":"2026-04-03T03:20:00Z","cwd":"/tmp/where-it-was"}}
+        {"timestamp":"2026-04-03T03:20:01Z","type":"turn_context","payload":{"turn_id":"t1","cwd":"/tmp/where-it-was","model":"gpt-5.6-sol"}}
+        {"timestamp":"2026-04-03T03:20:02Z","type":"turn_context","payload":{"turn_id":"t2","cwd":"/tmp/where-it-is-now","model":"gpt-5.6-sol"}}
+        """
+        try body.write(to: rollout, atomically: true, encoding: .utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-04-03T03:20:10Z")!
+        try setMtime(rollout, to: now)
+
+        let sessions = SessionDiscovery.discoverCodex(
+            rootURL: tempRoot.appendingPathComponent(".codex/sessions", isDirectory: true),
+            now: now
+        )
+        let s = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(s.cwd, "/tmp/where-it-is-now")
+        XCTAssertEqual(s.jumpTarget?.workingDirectory, "/tmp/where-it-is-now")
+    }
+
     func testCodexIgnoresNonRolloutJSONL() throws {
         let root = tempRoot.appendingPathComponent(".codex/sessions", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

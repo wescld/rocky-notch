@@ -48,6 +48,35 @@ final class DiscoveryLivenessTests: XCTestCase {
         )
     }
 
+    /// The kernel reports a process's directory through the firmlink while a
+    /// transcript records what the user typed, so the raw strings differ for
+    /// the same folder — comparing them unnormalized drops a live session.
+    func testFirmlinkSpellingsAreTheSameTree() {
+        XCTAssertTrue(SessionDiscovery.sharesTree("/tmp/demo", "/private/tmp/demo"))
+        XCTAssertTrue(SessionDiscovery.sharesTree("/private/var/folders/x", "/var/folders/x"))
+        let sessions = [session("s1", agent: "codex", cwd: "/tmp/demo")]
+        XCTAssertEqual(
+            SessionDiscovery.filterToLiveAgents(sessions) { _ in ["/private/tmp/demo"] }.count,
+            1
+        )
+    }
+
+    /// `/private` is only stripped where it is the firmlink prefix, never from
+    /// a directory that merely happens to be called that.
+    func testCanonicalPathLeavesOrdinaryPathsAlone() {
+        XCTAssertEqual(SessionDiscovery.canonicalPath("/Users/k/proj"), "/Users/k/proj")
+        XCTAssertEqual(SessionDiscovery.canonicalPath("/Users/k/private/tmp"), "/Users/k/private/tmp")
+        XCTAssertEqual(SessionDiscovery.canonicalPath("/tmp/a/../b"), "/tmp/b")
+    }
+
+    /// The explicit pairs matter because `standardizingPath` only strips the
+    /// firmlink for a path that exists on disk, and a session's directory may
+    /// well be gone by the time we compare it.
+    func testCanonicalPathNormalizesEvenWhenTheDirectoryIsGone() {
+        let gone = "/tmp/rocky-gone-\(UUID().uuidString)"
+        XCTAssertEqual(SessionDiscovery.canonicalPath("/private" + gone), gone)
+    }
+
     /// Sibling directories that share a prefix are not the same tree.
     func testPrefixAloneIsNotContainment() {
         let sessions = [session("s1", agent: "codex", cwd: "/proj/web")]
@@ -121,6 +150,17 @@ final class DiscoveryLivenessTests: XCTestCase {
         )
     }
 
+    /// Paths keep the casing they were created with, and macOS volumes are
+    /// usually case-insensitive, so a capitalized install must still match.
+    func testMatchIsCaseInsensitive() {
+        XCTAssertTrue(
+            ProcessAncestry.isAgentExecutable("/opt/Claude/bin/claude", markers: ["claude"])
+        )
+        XCTAssertTrue(
+            ProcessAncestry.isAgentExecutable("/opt/homebrew/bin/Codex", markers: ["codex"])
+        )
+    }
+
     /// The versioned binary is why an agent PID was never resolved for Claude
     /// Code: `proc_name` answers "2.1.220", so the name check alone says no.
     func testIdentityFallsBackToTheNameButLeadsWithThePath() {
@@ -149,6 +189,18 @@ final class DiscoveryLivenessTests: XCTestCase {
                 executablePath: "/usr/bin/vim", processName: "vim", markers: ["claude"]
             ),
             false
+        )
+    }
+
+    /// A name that does not match is the *normal* state of a live Claude Code
+    /// process, so it must never be the reason to call one dead. With no path
+    /// to consult the honest answer is "cannot tell" — answering false here
+    /// would have `pruneDeadHosts` drop a session that is still running.
+    func testAnUnmatchedNameAloneNeverDenies() {
+        XCTAssertNil(
+            ProcessAncestry.identityMatches(
+                executablePath: nil, processName: "2.1.220", markers: ["claude"]
+            )
         )
     }
 

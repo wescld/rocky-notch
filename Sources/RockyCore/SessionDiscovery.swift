@@ -90,8 +90,28 @@ public enum SessionDiscovery {
 
     /// Same directory, or one contains the other. Compared by path boundary so
     /// `/a/web` is not treated as living inside `/a/web-app`.
+    ///
+    /// Both sides are canonicalized first: the kernel reports a process's
+    /// directory through the firmlink (`/private/tmp/…`) while a transcript
+    /// records the path the user typed (`/tmp/…`), and comparing those raw
+    /// would drop a live session as dead. The rest of the codebase already
+    /// normalizes this pair — see `WarpSQLiteReader.cwdLookupCandidates` and
+    /// the transcript path in `makeObservationalSession`.
     static func sharesTree(_ lhs: String, _ rhs: String) -> Bool {
-        lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
+        let left = canonicalPath(lhs)
+        let right = canonicalPath(rhs)
+        return left == right || left.hasPrefix(right + "/") || right.hasPrefix(left + "/")
+    }
+
+    /// Collapses the `/private` firmlink prefix and any `..` / trailing slash,
+    /// so two spellings of the same directory compare equal.
+    static func canonicalPath(_ path: String) -> String {
+        let standardized = (path as NSString).standardizingPath
+        for pair in ["/private/tmp", "/private/var"] where standardized == pair
+            || standardized.hasPrefix(pair + "/") {
+            return String(standardized.dropFirst("/private".count))
+        }
+        return standardized
     }
 
     // MARK: - Claude
@@ -326,7 +346,12 @@ public enum SessionDiscovery {
                 if let value = payload["model"] as? String, !value.isEmpty {
                     model = value
                 }
-                if let value = payload["cwd"] as? String, !value.isEmpty, cwd == nil {
+                // Latest wins. `session_meta` records where the session was
+                // born, but `codex resume` can restart it somewhere else and
+                // only `turn_context` says so — keeping the birthplace shows
+                // the wrong project name, and now also compares a live agent
+                // against a directory it left, which reads as "not running".
+                if let value = payload["cwd"] as? String, !value.isEmpty {
                     cwd = value
                 }
             } else if type == "event_msg" {

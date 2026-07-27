@@ -90,16 +90,15 @@ public enum ProcessAncestry {
         processName: String?,
         markers: [String]
     ) -> Bool? {
-        var readSomething = false
-        if let executablePath {
-            readSomething = true
-            if isAgentExecutable(executablePath, markers: markers) { return true }
+        if let processName, nameMatches(processName.lowercased(), markers: markers) {
+            return true
         }
-        if let processName {
-            readSomething = true
-            if nameMatches(processName.lowercased(), markers: markers) { return true }
-        }
-        return readSomething ? false : nil
+        // Only the path may answer "no". A name that does not match is the
+        // normal state of a live Claude Code process — it is named after its
+        // version — so letting the name deny would report a running agent as
+        // gone, and `pruneDeadHosts` would drop the session off the notch.
+        guard let executablePath else { return nil }
+        return isAgentExecutable(executablePath, markers: markers)
     }
 
     /// Working directories of every live process that looks like `agent`.
@@ -117,13 +116,32 @@ public enum ProcessAncestry {
         let markers = agentNameMarkers(for: agent)
         guard !markers.isEmpty, let pids = allPids() else { return nil }
         var directories: Set<String> = []
+        var unreadable = false
         for pid in pids where pid > 0 {
-            guard let path = executablePath(of: pid),
-                  isAgentExecutable(path, markers: markers)
-            else { continue }
-            guard let cwd = workingDirectory(of: pid) else { return nil }
-            directories.insert(cwd)
+            // Same rule the ancestry walk uses, name fallback included: a
+            // path-only check would skip a live agent whose path failed to
+            // read, and a skipped agent reads as "not running there".
+            switch isAgentProcess(pid: pid, markers: markers) {
+            case .some(false):
+                continue
+            case nil:
+                // Could be the agent; nothing about it was readable.
+                unreadable = true
+            case .some(true):
+                // A process can exit between the two lookups, and one whose
+                // directory we cannot read says nothing about the others —
+                // abandoning the whole scan for it would answer "cannot tell"
+                // for the machine, which keeps every stale row alive.
+                if let cwd = workingDirectory(of: pid) {
+                    directories.insert(cwd)
+                } else {
+                    unreadable = true
+                }
+            }
         }
+        // Matches existed but not one of them could be placed: that genuinely
+        // is no information, and must not read as "nothing is running".
+        if directories.isEmpty, unreadable { return nil }
         return directories
     }
 
@@ -136,20 +154,35 @@ public enum ProcessAncestry {
     static func isAgentExecutable(_ path: String, markers: [String]) -> Bool {
         guard !path.contains(".app/") else { return false }
         return path.split(separator: "/").contains { component in
-            let name = component.hasPrefix(".") ? String(component.dropFirst()) : String(component)
+            // Case-insensitive: markers are lower-cased, but a path keeps the
+            // casing it was created with, and macOS volumes are usually
+            // case-insensitive — so a `Claude/` install would slip past.
+            let name = (component.hasPrefix(".") ? component.dropFirst() : component[...])
+                .lowercased()
             return markers.contains(name)
         }
     }
 
+    /// Every live PID, or nil if the table could not be read.
+    ///
+    /// A filled buffer is indistinguishable from a truncated one, and a missed
+    /// process reads as "that agent is not running" — the answer that costs a
+    /// live row. So a full buffer is retried larger rather than accepted.
     private static func allPids() -> [pid_t]? {
-        let capacity = proc_listallpids(nil, 0)
+        var capacity = proc_listallpids(nil, 0)
         guard capacity > 0 else { return nil }
-        // Room to spare: processes can appear between sizing and reading.
-        var pids = [pid_t](repeating: 0, count: Int(capacity) + 64)
-        let bytes = Int32(MemoryLayout<pid_t>.size * pids.count)
-        let written = proc_listallpids(&pids, bytes)
-        guard written > 0 else { return nil }
-        return Array(pids.prefix(Int(written)))
+        for _ in 0..<4 {
+            // Room to spare: processes can appear between sizing and reading.
+            var pids = [pid_t](repeating: 0, count: Int(capacity) + 128)
+            let byteCount = Int32(MemoryLayout<pid_t>.size * pids.count)
+            let written = proc_listallpids(&pids, byteCount)
+            guard written > 0 else { return nil }
+            if Int(written) < pids.count {
+                return Array(pids.prefix(Int(written)))
+            }
+            capacity = Int32(pids.count * 2)
+        }
+        return nil
     }
 
     private static func executablePath(of pid: pid_t) -> String? {
