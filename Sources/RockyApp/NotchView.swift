@@ -238,8 +238,9 @@ struct NotchView: View {
             // The middle is deliberately left empty — the cutout covers it.
             HStack(spacing: 9) {
                 ViewThatFits(in: .horizontal) {
-                    capUsage(compact: false)
-                    capUsage(compact: true)
+                    capUsage(.full)
+                    capUsage(.claudeOnly)
+                    capUsage(.sessionOnly)
                     EmptyView()
                 }
                 .transition(.opacity)
@@ -317,35 +318,98 @@ struct NotchView: View {
         }
     }
 
-    /// `compact` drops the Codex window, keeping the Claude one, when the
-    /// strip beside the notch cannot hold both.
+    /// How much of the account strip the space beside the notch can hold.
+    /// Sheds Codex first, then the weekly figures — the session reading is the
+    /// last thing to go, and what remains is what the cap showed before the
+    /// weekly windows arrived.
+    private enum UsageDensity {
+        case full
+        case claudeOnly
+        case sessionOnly
+    }
+
+    /// A weekly window's two readings, normalised across the per-agent window
+    /// types so one view can render either.
+    private struct WeeklyReading {
+        var rounded: Int
+        var heat: Double
+
+        init?(_ window: ClaudeUsageWindow?) {
+            guard let window else { return nil }
+            rounded = window.roundedUsedPercentage
+            heat = window.usedPercentage
+        }
+
+        init?(_ window: CodexUsageWindow?) {
+            guard let window else { return nil }
+            rounded = window.roundedUsedPercentage
+            heat = window.usedPercentage
+        }
+    }
+
     @ViewBuilder
-    private func capUsage(compact: Bool) -> some View {
-        let claude = Preferences.showAccountUsage ? hub.claudeUsage : nil
-        let codex = (Preferences.showAccountUsage && !compact) ? hub.codexUsage : nil
+    private func capUsage(_ density: UsageDensity) -> some View {
+        let showUsage = Preferences.showAccountUsage
+        let claude = showUsage ? hub.claudeUsage : nil
+        let codex = (showUsage && density == .full) ? hub.codexUsage : nil
+        let weeklyFits = density != .sessionOnly
         HStack(spacing: 5) {
             if let five = claude?.fiveHour {
-                HStack(spacing: 3) {
-                    AgentLogo(agent: "claude-code", size: 11)
-                    Text("\(five.roundedUsedPercentage)% 5h")
-                }
-                .foregroundStyle(five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
-                .help("Claude account usage")
+                usagePair(
+                    agent: "claude-code",
+                    session: five.roundedUsedPercentage,
+                    sessionHeat: five.usedPercentage,
+                    sessionLabel: "5h",
+                    weekly: weeklyFits ? WeeklyReading(claude?.sevenDay) : nil,
+                    help: "Claude account usage"
+                )
             }
             if let primary = codex?.primary {
                 if claude?.fiveHour != nil {
                     Text("·").foregroundStyle(Palette.inkTertiary)
                 }
-                HStack(spacing: 3) {
-                    AgentLogo(agent: "codex", size: 11)
-                    Text("\(primary.roundedUsedPercentage)% \(primary.label)")
-                }
-                .foregroundStyle(primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
-                .help("Codex account usage")
+                usagePair(
+                    agent: "codex",
+                    session: primary.roundedUsedPercentage,
+                    sessionHeat: primary.usedPercentage,
+                    sessionLabel: primary.label,
+                    weekly: weeklyFits ? WeeklyReading(codex?.secondary) : nil,
+                    help: "Codex account usage"
+                )
             }
         }
         .font(.system(size: 10, weight: .medium, design: .monospaced))
         .fixedSize()
+    }
+
+    /// One agent's reading: its logo, the session figure, and — when the strip
+    /// affords it — the weekly figure sharing that same logo. The window label
+    /// is dropped once both are shown; two numbers under one logo already read
+    /// as session-then-week, and spelling it out costs the width that let the
+    /// weekly figure in.
+    @ViewBuilder
+    private func usagePair(
+        agent: String,
+        session: Int,
+        sessionHeat: Double,
+        sessionLabel: String,
+        weekly: WeeklyReading?,
+        help: String
+    ) -> some View {
+        HStack(spacing: 3) {
+            AgentLogo(agent: agent, size: 11)
+            if let weekly {
+                Text("\(session)%·\(weekly.rounded)%w")
+            } else {
+                Text("\(session)% \(sessionLabel)")
+            }
+        }
+        .foregroundStyle(
+            UsageHeat.isHot([sessionHeat, weekly?.heat])
+                ? Palette.amber
+                : Palette.inkSecondary
+        )
+        .help(help)
     }
 
     // MARK: - Expanded
