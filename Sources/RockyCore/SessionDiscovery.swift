@@ -54,6 +54,46 @@ public enum SessionDiscovery {
         return (claude + codex).sorted { $0.lastEventAt > $1.lastEventAt }
     }
 
+    /// Drops discovered rows whose agent has no live process anywhere near the
+    /// directory they were found in.
+    ///
+    /// Discovery reads transcripts, and a transcript outlives the session that
+    /// wrote it — nothing in the file says whether that agent is still running.
+    /// So every launch reseeded sessions the user had already closed, and the
+    /// notch claimed work that had been over for an hour.
+    ///
+    /// The rule is deliberately weak, because a wrong drop costs a real row:
+    /// a session is kept unless *no* process of its agent is running in that
+    /// directory, in one above it, or in one below it. That still cannot tell
+    /// two sessions in the same folder apart — there it keeps both — but it
+    /// settles the case that actually misleads, where the agent is not running
+    /// there at all.
+    ///
+    /// `workingDirectories` returning nil means "cannot tell"; those sessions
+    /// are kept untouched.
+    public static func filterToLiveAgents(
+        _ sessions: [AgentSession],
+        workingDirectories: (String) -> Set<String>?
+    ) -> [AgentSession] {
+        var cache: [String: Set<String>?] = [:]
+        return sessions.filter { session in
+            guard let cwd = session.cwd, !cwd.isEmpty else { return true }
+            let directories = cache[session.agent] ?? {
+                let looked = workingDirectories(session.agent)
+                cache[session.agent] = looked
+                return looked
+            }()
+            guard let directories else { return true }
+            return directories.contains { sharesTree($0, cwd) }
+        }
+    }
+
+    /// Same directory, or one contains the other. Compared by path boundary so
+    /// `/a/web` is not treated as living inside `/a/web-app`.
+    static func sharesTree(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
+    }
+
     // MARK: - Claude
 
     public static func discoverClaude(

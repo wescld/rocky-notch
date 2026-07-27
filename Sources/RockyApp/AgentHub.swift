@@ -162,7 +162,13 @@ final class AgentHub: ObservableObject {
     /// Never overwrites a live (or already-restored) session id.
     private func discoverSessionsFromTranscripts() {
         Task.detached(priority: .utility) {
-            let found = SessionDiscovery.discoverRecent()
+            // A transcript outlives the session that wrote it, so the scan is
+            // checked against the process table before anything is seeded —
+            // otherwise every relaunch resurrects work the user already closed.
+            let found = SessionDiscovery.filterToLiveAgents(
+                SessionDiscovery.discoverRecent(),
+                workingDirectories: { ProcessAncestry.agentWorkingDirectories(for: $0) }
+            )
             guard !found.isEmpty else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }

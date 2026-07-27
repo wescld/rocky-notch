@@ -68,6 +68,78 @@ public enum ProcessAncestry {
         return nameMatches(name, markers: markers)
     }
 
+    /// Working directories of every live process that looks like `agent`.
+    ///
+    /// Answers "could a session of this agent still be alive in that folder?".
+    /// Returns nil whenever the answer cannot be trusted — the process list is
+    /// unreadable, or a matching process exists whose directory we could not
+    /// read — so callers can tell "nothing is running" apart from "I could not
+    /// tell", and never act on the second as if it were the first.
+    ///
+    /// Matching is on the executable's *path*, not its name: the Claude Code
+    /// installer keeps the binary at `.../claude/versions/<version>`, so
+    /// `proc_name` reports the version number and a name check never matches.
+    public static func agentWorkingDirectories(for agent: String) -> Set<String>? {
+        let markers = agentNameMarkers(for: agent)
+        guard !markers.isEmpty, let pids = allPids() else { return nil }
+        var directories: Set<String> = []
+        for pid in pids where pid > 0 {
+            guard let path = executablePath(of: pid),
+                  isAgentExecutable(path, markers: markers)
+            else { continue }
+            guard let cwd = workingDirectory(of: pid) else { return nil }
+            directories.insert(cwd)
+        }
+        return directories
+    }
+
+    /// A marker has to own a whole path component, so `claude` matches
+    /// `~/.local/share/claude/versions/2.1.220` and `~/.claude/local/claude`,
+    /// but not Claude Code's own scratch root at `/private/tmp/claude-501/…`.
+    /// A leading dot is ignored so a hidden install directory still counts.
+    /// Bundled apps are excluded outright: `/Applications/Claude.app/...` is
+    /// the desktop app, not the CLI.
+    static func isAgentExecutable(_ path: String, markers: [String]) -> Bool {
+        guard !path.contains(".app/") else { return false }
+        return path.split(separator: "/").contains { component in
+            let name = component.hasPrefix(".") ? String(component.dropFirst()) : String(component)
+            return markers.contains(name)
+        }
+    }
+
+    private static func allPids() -> [pid_t]? {
+        let capacity = proc_listallpids(nil, 0)
+        guard capacity > 0 else { return nil }
+        // Room to spare: processes can appear between sizing and reading.
+        var pids = [pid_t](repeating: 0, count: Int(capacity) + 64)
+        let bytes = Int32(MemoryLayout<pid_t>.size * pids.count)
+        let written = proc_listallpids(&pids, bytes)
+        guard written > 0 else { return nil }
+        return Array(pids.prefix(Int(written)))
+    }
+
+    private static func executablePath(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(4 * MAXPATHLEN))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    private static func workingDirectory(of pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        let read = withUnsafeMutablePointer(to: &info) {
+            proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, $0, size)
+        }
+        guard read == size else { return nil }
+        let path = withUnsafePointer(to: &info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                String(cString: $0)
+            }
+        }
+        return path.isEmpty ? nil : path
+    }
+
     public static func parentPid(of pid: pid_t) -> pid_t? {
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
