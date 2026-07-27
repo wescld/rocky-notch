@@ -337,25 +337,6 @@ struct NotchView: View {
         case sessionOnly
     }
 
-    /// A weekly window's two readings, normalised across the per-agent window
-    /// types so one view can render either.
-    private struct WeeklyReading {
-        var rounded: Int
-        var heat: Double
-
-        init?(_ window: ClaudeUsageWindow?) {
-            guard let window else { return nil }
-            rounded = window.roundedUsedPercentage
-            heat = window.usedPercentage
-        }
-
-        init?(_ window: CodexUsageWindow?) {
-            guard let window else { return nil }
-            rounded = window.roundedUsedPercentage
-            heat = window.usedPercentage
-        }
-    }
-
     @ViewBuilder
     private func capUsage(_ density: UsageDensity) -> some View {
         let showUsage = Preferences.showAccountUsage
@@ -364,61 +345,23 @@ struct NotchView: View {
         let weeklyFits = density != .sessionOnly
         HStack(spacing: 5) {
             if let five = claude?.fiveHour {
-                usagePair(
-                    agent: "claude-code",
-                    session: five.roundedUsedPercentage,
-                    sessionHeat: five.usedPercentage,
-                    sessionLabel: "5h",
-                    weekly: weeklyFits ? WeeklyReading(claude?.sevenDay) : nil,
-                    help: "Claude account usage"
+                AccountUsageChip(
+                    claude: five,
+                    weekly: weeklyFits ? claude?.sevenDay : nil
                 )
             }
             if let primary = codex?.primary {
                 if claude?.fiveHour != nil {
                     Text("·").foregroundStyle(Palette.inkTertiary)
                 }
-                usagePair(
-                    agent: "codex",
-                    session: primary.roundedUsedPercentage,
-                    sessionHeat: primary.usedPercentage,
-                    sessionLabel: primary.label,
-                    weekly: weeklyFits ? WeeklyReading(codex?.secondary) : nil,
-                    help: "Codex account usage"
+                AccountUsageChip(
+                    codex: primary,
+                    weekly: weeklyFits ? codex?.secondary : nil
                 )
             }
         }
         .font(.system(size: 10, weight: .medium, design: .monospaced))
         .fixedSize()
-    }
-
-    /// One agent's reading: its logo, the session figure, and — when the strip
-    /// affords it — the weekly figure sharing that same logo. The window label
-    /// is dropped once both are shown; two numbers under one logo already read
-    /// as session-then-week, and spelling it out costs the width that let the
-    /// weekly figure in.
-    @ViewBuilder
-    private func usagePair(
-        agent: String,
-        session: Int,
-        sessionHeat: Double,
-        sessionLabel: String,
-        weekly: WeeklyReading?,
-        help: String
-    ) -> some View {
-        HStack(spacing: 3) {
-            AgentLogo(agent: agent, size: 11)
-            if let weekly {
-                Text("\(session)%·\(weekly.rounded)%w")
-            } else {
-                Text("\(session)% \(sessionLabel)")
-            }
-        }
-        .foregroundStyle(
-            UsageHeat.isHot([sessionHeat, weekly?.heat])
-                ? Palette.amber
-                : Palette.inkSecondary
-        )
-        .help(help)
     }
 
     // MARK: - Expanded
@@ -531,32 +474,20 @@ struct SessionListView: View {
                         Text(work).foregroundStyle(Palette.inkSecondary)
                     }
                 }
+                // The panel is not fighting the cutout for width, so both
+                // windows always show here — the cap may have had to shed one,
+                // and the same figure must not read two ways on one screen.
                 if let five = claude?.fiveHour {
                     if hasTokens || hasWork {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    HStack(spacing: 3) {
-                        AgentLogo(agent: "claude-code", size: 11)
-                        Text("\(five.roundedUsedPercentage)% 5h")
-                    }
-                    .foregroundStyle(
-                        five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                    )
-                    .help("Claude account usage")
+                    AccountUsageChip(claude: five, weekly: claude?.sevenDay)
                 }
                 if let primary = codex?.primary {
                     if hasTokens || hasWork || hasClaude {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    // Sample: logo + "13% 5h" (primary short window)
-                    HStack(spacing: 3) {
-                        AgentLogo(agent: "codex", size: 11)
-                        Text("\(primary.roundedUsedPercentage)% \(primary.label)")
-                    }
-                    .foregroundStyle(
-                        primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                    )
-                    .help("Codex account usage")
+                    AccountUsageChip(codex: primary, weekly: codex?.secondary)
                 }
                 Spacer()
             }
@@ -637,6 +568,62 @@ struct TokenIcon: View {
                 .font(.system(size: size * 0.8))
                 .foregroundStyle(Palette.green)
         }
+    }
+}
+
+/// One agent's account reading: its logo, the session figure, and — when the
+/// caller has room for it — the weekly figure sharing that same logo.
+///
+/// The window label is dropped once both figures show. Two numbers under one
+/// logo already read as session-then-week, and spelling the windows out costs
+/// exactly the width that let the weekly figure in beside the cutout.
+///
+/// Colour follows the hotter of the two windows, so a spent week warns through
+/// a calm session instead of hiding behind it.
+struct AccountUsageChip: View {
+    private let agent: String
+    private let session: Int
+    private let sessionHeat: Double
+    private let sessionLabel: String
+    private let weeklyRounded: Int?
+    private let weeklyHeat: Double?
+    private let help: String
+
+    init(claude session: ClaudeUsageWindow, weekly: ClaudeUsageWindow?) {
+        agent = "claude-code"
+        self.session = session.roundedUsedPercentage
+        sessionHeat = session.usedPercentage
+        sessionLabel = "5h"
+        weeklyRounded = weekly?.roundedUsedPercentage
+        weeklyHeat = weekly?.usedPercentage
+        help = "Claude account usage"
+    }
+
+    init(codex session: CodexUsageWindow, weekly: CodexUsageWindow?) {
+        agent = "codex"
+        self.session = session.roundedUsedPercentage
+        sessionHeat = session.usedPercentage
+        sessionLabel = session.label
+        weeklyRounded = weekly?.roundedUsedPercentage
+        weeklyHeat = weekly?.usedPercentage
+        help = "Codex account usage"
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            AgentLogo(agent: agent, size: 11)
+            if let weeklyRounded {
+                Text("\(session)%·\(weeklyRounded)%w")
+            } else {
+                Text("\(session)% \(sessionLabel)")
+            }
+        }
+        .foregroundStyle(
+            UsageHeat.isHot([sessionHeat, weeklyHeat])
+                ? Palette.amber
+                : Palette.inkSecondary
+        )
+        .help(help)
     }
 }
 
