@@ -350,10 +350,11 @@ struct NotchView: View {
                     weekly: weeklyFits ? claude?.sevenDay : nil
                 )
             }
+            // No dot between the agents here, unlike the panel: each chip opens
+            // with its own logo, which separates them well enough, and the
+            // glyph costs more width than the strip beside a 209pt cutout can
+            // spare once both windows show.
             if let primary = codex?.primary {
-                if claude?.fiveHour != nil {
-                    Text("·").foregroundStyle(Palette.inkTertiary)
-                }
                 AccountUsageChip(
                     codex: primary,
                     weekly: weeklyFits ? codex?.secondary : nil
@@ -574,9 +575,10 @@ struct TokenIcon: View {
 /// One agent's account reading: its logo, the session figure, and — when the
 /// caller has room for it — the weekly figure sharing that same logo.
 ///
-/// The window label is dropped once both figures show. Two numbers under one
-/// logo already read as session-then-week, and spelling the windows out costs
-/// exactly the width that let the weekly figure in beside the cutout.
+/// The window label is dropped once both figures show, and so is the second
+/// percent sign: the first one sets the unit for the pair, and on a 209pt
+/// cutout that one glyph is the difference between both agents fitting beside
+/// the notch and one of them being shed entirely.
 ///
 /// Colour follows the hotter of the two windows, so a spent week warns through
 /// a calm session instead of hiding behind it.
@@ -613,7 +615,7 @@ struct AccountUsageChip: View {
         HStack(spacing: 3) {
             AgentLogo(agent: agent, size: 11)
             if let weeklyRounded {
-                Text("\(session)%·\(weeklyRounded)%w")
+                Text("\(session)%·\(weeklyRounded)w")
             } else {
                 Text("\(session)% \(sessionLabel)")
             }
