@@ -34,11 +34,11 @@ public enum ProcessAncestry {
         var current = pid_t(hookPid)
         for _ in 0..<15 {
             guard let parent = parentPid(of: current), parent > 1 else { return nil }
-            if let name = processName(of: parent)?.lowercased() {
-                if nameMatches(name, markers: markers) {
-                    return Int32(parent)
-                }
-                if isLikelyGuiHost(name) { return nil }
+            if isAgentProcess(pid: parent, markers: markers) == true {
+                return Int32(parent)
+            }
+            if let name = processName(of: parent)?.lowercased(), isLikelyGuiHost(name) {
+                return nil
             }
             current = parent
         }
@@ -53,7 +53,7 @@ public enum ProcessAncestry {
         return errno == EPERM
     }
 
-    /// Agent CLI still running **and** still named like the agent.
+    /// Agent CLI still running **and** still the agent.
     /// After Ctrl+C the PID can be reused by an unrelated process; a bare
     /// `kill(pid, 0)` would keep the Rocky card forever in that case.
     public static func isAgentProcessStillValid(pid: Int32, agent: String) -> Bool {
@@ -61,11 +61,45 @@ public enum ProcessAncestry {
         let markers = agentNameMarkers(for: agent)
         // Cursor / unknown: existence alone is enough.
         guard !markers.isEmpty else { return true }
-        guard let name = processName(of: pid_t(pid))?.lowercased() else {
-            // Process exists but name is unreadable — keep (fail-open).
-            return true
+        // Identity unreadable — keep (fail-open), as before.
+        return isAgentProcess(pid: pid_t(pid), markers: markers) ?? true
+    }
+
+    /// Whether a live process is this agent's CLI. `nil` when its identity
+    /// could not be read at all, which callers treat as "no opinion" rather
+    /// than as a denial.
+    static func isAgentProcess(pid: pid_t, markers: [String]) -> Bool? {
+        identityMatches(
+            executablePath: executablePath(of: pid),
+            processName: processName(of: pid),
+            markers: markers
+        )
+    }
+
+    /// Split out from the process lookup so the rule itself is testable.
+    ///
+    /// The path is consulted first and the name second, because the name alone
+    /// is not enough: the Claude Code installer keeps its binary at
+    /// `.../claude/versions/<version>`, so `proc_name` returns the version
+    /// number and no marker ever matches it — Rocky never resolved an agent PID
+    /// for a Claude Code session, which cost those rows both Ctrl+C detection
+    /// and their full retention window. The name check stays as a fallback so
+    /// agents that already resolved keep resolving when a path is unreadable.
+    static func identityMatches(
+        executablePath: String?,
+        processName: String?,
+        markers: [String]
+    ) -> Bool? {
+        var readSomething = false
+        if let executablePath {
+            readSomething = true
+            if isAgentExecutable(executablePath, markers: markers) { return true }
         }
-        return nameMatches(name, markers: markers)
+        if let processName {
+            readSomething = true
+            if nameMatches(processName.lowercased(), markers: markers) { return true }
+        }
+        return readSomething ? false : nil
     }
 
     /// Working directories of every live process that looks like `agent`.

@@ -121,6 +121,47 @@ final class DiscoveryLivenessTests: XCTestCase {
         )
     }
 
+    /// The versioned binary is why an agent PID was never resolved for Claude
+    /// Code: `proc_name` answers "2.1.220", so the name check alone says no.
+    func testIdentityFallsBackToTheNameButLeadsWithThePath() {
+        XCTAssertEqual(
+            ProcessAncestry.identityMatches(
+                executablePath: "/Users/k/.local/share/claude/versions/2.1.220",
+                processName: "2.1.220",
+                markers: ["claude"]
+            ),
+            true
+        )
+        // Path unreadable, name still enough — how codex and grok already
+        // resolved, and must keep resolving.
+        XCTAssertEqual(
+            ProcessAncestry.identityMatches(
+                executablePath: nil, processName: "codex", markers: ["codex"]
+            ),
+            true
+        )
+    }
+
+    /// PID reuse: the process exists but is something else entirely.
+    func testIdentityRejectsAnUnrelatedProcess() {
+        XCTAssertEqual(
+            ProcessAncestry.identityMatches(
+                executablePath: "/usr/bin/vim", processName: "vim", markers: ["claude"]
+            ),
+            false
+        )
+    }
+
+    /// Nothing readable is not a denial — it used to keep the row, and still
+    /// must, or an unreadable process would silently drop a live session.
+    func testIdentityHasNoOpinionWhenNothingIsReadable() {
+        XCTAssertNil(
+            ProcessAncestry.identityMatches(
+                executablePath: nil, processName: nil, markers: ["claude"]
+            )
+        )
+    }
+
     func testUnrelatedBinaryIsNotMatched() {
         XCTAssertFalse(
             ProcessAncestry.isAgentExecutable("/usr/bin/node", markers: ["claude"])
