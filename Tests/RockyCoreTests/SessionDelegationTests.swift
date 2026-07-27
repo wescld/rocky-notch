@@ -154,6 +154,44 @@ final class SessionDelegationTests: XCTestCase {
         XCTAssertEqual(store.sessions["s1"]?.backgroundTasks, [])
     }
 
+    /// A relaunch brings a delegating session back as idle with no list, and
+    /// the next event is often a SubagentStop still carrying children. Only
+    /// handling the drain left that session idle with children drawn under
+    /// it — "done · click to jump" over live agents, one door further along.
+    func testSubagentStopLiftsARestingSessionBackToDelegating() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop", backgroundTasks: []), at: t0 + 10)
+        XCTAssertEqual(store.sessions["s1"]?.status, .idle)
+
+        store.apply(
+            envelope("SubagentStop", agentId: "ag1", backgroundTasks: [subagent, shell]),
+            at: t0 + 20
+        )
+        XCTAssertEqual(store.sessions["s1"]?.status, .delegating)
+        XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.count, 2)
+    }
+
+    /// Being blocked on the user outranks delegation: the session is not at
+    /// rest, it is waiting on a person.
+    func testSubagentStopDoesNotOverrideAWait() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        let blocked = HookEnvelope(
+            requestId: "r1", hookPid: 1, agent: "claude-code",
+            event: HookEvent(
+                sessionId: "s1", hookEventName: "Notification",
+                cwd: "/tmp/proj", notificationType: "agent_needs_input"
+            )
+        )
+        store.apply(blocked, at: t0 + 5)
+        store.apply(
+            envelope("SubagentStop", agentId: "ag1", backgroundTasks: [subagent]),
+            at: t0 + 10
+        )
+        XCTAssertEqual(store.sessions["s1"]?.status, .waitingInput)
+    }
+
     /// A child finishing while the main loop is working says nothing about the
     /// main loop.
     func testSubagentStopLeavesARunningSessionRunning() {

@@ -314,11 +314,24 @@ public struct SessionStore: Equatable, Sendable {
         case .subagentStop:
             // The closing words on this event are the *subagent's*; the parent
             // keeps its own. All that is taken from here is the refreshed
-            // in-flight list applied above — and what it implies: once the
-            // last child is gone, a parked session is finally idle. A session
-            // whose main loop is running is left alone.
-            if session.status == .delegating, session.backgroundTasks.isEmpty {
-                session.status = .idle
+            // in-flight list applied above — and where that leaves a session
+            // at rest, in both directions.
+            //
+            // Draining to empty is the obvious one. The other matters just as
+            // much: a relaunch restores a delegating session as idle with no
+            // list (Rocky cannot vouch for work it did not see start), and the
+            // next event is often a SubagentStop still carrying children. Only
+            // handling the drain left that session idle with children drawn
+            // under it — the "done · click to jump" over live agents this
+            // whole change exists to stop, back through another door.
+            //
+            // A session whose main loop is running, or which is blocked on the
+            // user, is not at rest and is left alone.
+            switch session.status {
+            case .running, .waitingPermission, .waitingInput:
+                break
+            case .idle, .delegating:
+                session.status = Self.restingStatus(of: session)
             }
         case .sessionEnd, .unknown:
             break

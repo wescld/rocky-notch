@@ -64,8 +64,12 @@ struct NotchView: View {
         }
     }
 
+    /// Drives Rocky in the closed cap, which is the only thing the user sees
+    /// without opening the notch — so it has to count delegated work too.
+    /// Showing him asleep over three running agents is the exact "nothing is
+    /// happening" this change exists to fix, surviving where it is most seen.
     private var anyRunning: Bool {
-        hub.sessions.contains { $0.status == .running }
+        hub.sessions.contains { $0.status == .running || $0.status == .delegating }
     }
 
     private var cap: CGSize {
