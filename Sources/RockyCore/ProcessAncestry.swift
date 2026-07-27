@@ -149,11 +149,14 @@ public enum ProcessAncestry {
     /// `~/.local/share/claude/versions/2.1.220` and `~/.claude/local/claude`,
     /// but not Claude Code's own scratch root at `/private/tmp/claude-501/…`.
     /// A leading dot is ignored so a hidden install directory still counts.
-    /// Bundled apps are excluded outright: `/Applications/Claude.app/...` is
-    /// the desktop app, not the CLI.
+    ///
+    /// App bundles are deliberately *not* excluded. Claude Code now ships its
+    /// CLI as one — `~/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude`
+    /// — so rejecting every `.app/` would miss the real agent. The desktop app
+    /// does match too, but it runs from `/` and callers that care about
+    /// directories discount umbrella paths anyway.
     static func isAgentExecutable(_ path: String, markers: [String]) -> Bool {
-        guard !path.contains(".app/") else { return false }
-        return path.split(separator: "/").contains { component in
+        path.split(separator: "/").contains { component in
             // Case-insensitive: markers are lower-cased, but a path keeps the
             // casing it was created with, and macOS volumes are usually
             // case-insensitive — so a `Claude/` install would slip past.

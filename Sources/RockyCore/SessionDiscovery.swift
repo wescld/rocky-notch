@@ -73,6 +73,7 @@ public enum SessionDiscovery {
     /// are kept untouched.
     public static func filterToLiveAgents(
         _ sessions: [AgentSession],
+        home: String = NSHomeDirectory(),
         workingDirectories: (String) -> Set<String>?
     ) -> [AgentSession] {
         var cache: [String: Set<String>?] = [:]
@@ -84,8 +85,23 @@ public enum SessionDiscovery {
                 return looked
             }()
             guard let directories else { return true }
-            return directories.contains { sharesTree($0, cwd) }
+            return directories.contains { directory in
+                // An agent sitting in the home folder — a launcher shim, or a
+                // session started before cd-ing anywhere — is under every
+                // project on the machine, so containment from there would
+                // vouch for all of them and the filter would do nothing at
+                // all. Measured: exactly this made a known-dead row survive.
+                isUmbrella(directory, home: home)
+                    ? canonicalPath(directory) == canonicalPath(cwd)
+                    : sharesTree(directory, cwd)
+            }
         }
+    }
+
+    /// Too broad to identify a project, so it may only vouch for itself.
+    static func isUmbrella(_ path: String, home: String) -> Bool {
+        let canonical = canonicalPath(path)
+        return canonical == "/" || canonical == canonicalPath(home)
     }
 
     /// Same directory, or one contains the other. Compared by path boundary so

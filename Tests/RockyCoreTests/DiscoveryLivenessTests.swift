@@ -77,6 +77,32 @@ final class DiscoveryLivenessTests: XCTestCase {
         XCTAssertEqual(SessionDiscovery.canonicalPath("/private" + gone), gone)
     }
 
+    /// Observed live: a `claude` shim runs from the home folder, which is above
+    /// every project on the machine. Letting containment count from there
+    /// vouched for every session and the filter stopped filtering — a row known
+    /// to be dead came straight back.
+    func testAnAgentInTheHomeFolderVouchesOnlyForItself() {
+        let sessions = [session("s1", agent: "claude-code", cwd: "/Users/k/proj/app")]
+        let kept = SessionDiscovery.filterToLiveAgents(sessions, home: "/Users/k") { _ in
+            ["/Users/k"]
+        }
+        XCTAssertTrue(kept.isEmpty)
+
+        // …but a session actually running in the home folder is still real.
+        let atHome = [session("s2", agent: "claude-code", cwd: "/Users/k")]
+        XCTAssertEqual(
+            SessionDiscovery.filterToLiveAgents(atHome, home: "/Users/k") { _ in ["/Users/k"] }.count,
+            1
+        )
+    }
+
+    /// The desktop app runs from the root; it must not vouch for anything.
+    func testRootIsAnUmbrellaToo() {
+        let sessions = [session("s1", agent: "claude-code", cwd: "/Users/k/proj")]
+        let kept = SessionDiscovery.filterToLiveAgents(sessions, home: "/Users/k") { _ in ["/"] }
+        XCTAssertTrue(kept.isEmpty)
+    }
+
     /// Sibling directories that share a prefix are not the same tree.
     func testPrefixAloneIsNotContainment() {
         let sessions = [session("s1", agent: "codex", cwd: "/proj/web")]
@@ -134,11 +160,12 @@ final class DiscoveryLivenessTests: XCTestCase {
         )
     }
 
-    /// The desktop app is not the CLI, and its bundle path is full of the word.
-    func testBundledAppIsNotTheCLI() {
-        XCTAssertFalse(
+    /// Claude Code ships its CLI as an app bundle now, so rejecting `.app/`
+    /// outright would miss the real agent.
+    func testBundledCLIIsRecognized() {
+        XCTAssertTrue(
             ProcessAncestry.isAgentExecutable(
-                "/Applications/Claude.app/Contents/MacOS/Claude",
+                "/Users/k/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude",
                 markers: ["claude"]
             )
         )
