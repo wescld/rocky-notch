@@ -23,6 +23,17 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     /// lose the question ring. Optional so older snapshots still decode.
     public var lastAgentMessage: String?
     public var handoffAsksSomething: Bool?
+    /// Work that was in flight when the snapshot was taken.
+    ///
+    /// Leaving this out looked like the careful choice — Rocky cannot vouch
+    /// for work it did not see start. But the two ways of being wrong are not
+    /// equal. Kept, the worst case is a child shown for a few seconds after it
+    /// finished, and the next `Stop` corrects it. Dropped, the worst case is
+    /// the row announcing "done · click to jump" over agents that are still
+    /// running *and* falling back to the short idle retention, so it can be
+    /// pruned mid-flight. The second is the exact failure this status exists
+    /// to prevent, so the list is carried across.
+    public var backgroundTasks: [BackgroundTask]?
 
     public init(from session: AgentSession) {
         id = session.id
@@ -42,9 +53,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         task = session.task
         lastAgentMessage = session.lastAgentMessage
         handoffAsksSomething = session.handoffAsksSomething
-        // `backgroundTasks` is deliberately absent: it is a claim about work
-        // running *right now*, and Rocky cannot vouch for it across its own
-        // death. The next Stop / SubagentStop reports the truth in full.
+        backgroundTasks = session.backgroundTasks.isEmpty ? nil : session.backgroundTasks
     }
 
     public func asSession(now: Date = Date()) -> AgentSession {
@@ -69,14 +78,17 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         session.task = task
         session.lastAgentMessage = lastAgentMessage
         session.handoffAsksSomething = handoffAsksSomething ?? false
-        // Restored sessions are at best idle until a live hook re-attaches.
-        // Delegating joins them: without the in-flight list there is nothing
-        // to show, and asserting work we cannot see is the very thing this
-        // status exists to stop. The restored handoff keeps the row honest
-        // ("here is where it left off") instead of claiming it finished.
-        if session.status == .waitingPermission
-            || session.status == .running
-            || session.status == .delegating {
+        session.backgroundTasks = backgroundTasks ?? []
+        // Restored sessions are at best idle until a live hook re-attaches —
+        // a running main loop cannot be assumed to have survived, and a
+        // pending approval is never restored at all. Delegated work is the
+        // exception: it outlives the app that was watching it, so a session
+        // that still has a list comes back delegating. Anything the next
+        // `Stop` or `SubagentStop` disagrees with is corrected wholesale.
+        if session.status == .waitingPermission || session.status == .running {
+            session.status = .idle
+        }
+        if session.status == .delegating, session.backgroundTasks.isEmpty {
             session.status = .idle
         }
         // Touch so prune doesn't instantly drop very old snapshots that

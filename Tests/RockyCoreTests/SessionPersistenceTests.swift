@@ -64,10 +64,11 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertEqual(restored.first?.handoffAsksSomething, true)
     }
 
-    /// In-flight work is a claim about right now, and Rocky cannot vouch for it
-    /// across its own death — so a delegating session comes back as idle with
-    /// nothing to show, and the next Stop reports the truth.
-    func testDelegatingIsNotRestoredAsWork() throws {
+    /// Delegated work outlives the app that was watching it. Dropping the list
+    /// made a restored session claim "done" over running agents and fall back
+    /// to the short idle retention, which could prune it mid-flight — so the
+    /// list is carried across and the session comes back delegating.
+    func testDelegatingSurvivesTheRoundTrip() throws {
         var session = AgentSession(
             id: "s1",
             agent: "claude-code",
@@ -82,11 +83,36 @@ final class SessionPersistenceTests: XCTestCase {
             transcriptPath: nil,
             lastAction: nil
         )
-        session.backgroundTasks = [BackgroundTask(id: "ag1", kind: "subagent")]
+        session.backgroundTasks = [
+            BackgroundTask(id: "ag1", kind: "subagent", description: "Fable review", model: "fable")
+        ]
 
         let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.status, .delegating)
+        XCTAssertEqual(restored.first?.backgroundTasks.map(\.id), ["ag1"])
+        // Enrichment travels too, so the row does not lose "Fable" on relaunch.
+        XCTAssertEqual(restored.first?.backgroundTasks.first?.model, "fable")
+    }
+
+    /// A delegating session whose list did not survive has nothing to show for
+    /// the claim, so it settles as idle rather than asserting invisible work.
+    func testDelegatingWithoutAListComesBackIdle() throws {
+        let session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .delegating,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
         XCTAssertEqual(restored.first?.status, .idle)
-        XCTAssertEqual(restored.first?.backgroundTasks, [])
     }
 
     func testDropsStaleSessions() throws {

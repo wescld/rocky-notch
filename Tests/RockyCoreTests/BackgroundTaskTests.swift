@@ -59,16 +59,46 @@ final class BackgroundTaskTests: XCTestCase {
         XCTAssertNil(event.backgroundTasks)
     }
 
-    /// One unusable entry must not cost the whole list — the id is the join
-    /// key for tool events, so an entry without one is the only casualty.
-    func testEntryWithoutIdIsDroppedAndTheRestSurvive() throws {
+    /// An entry with no usable id is kept under a synthetic one. Dropping it
+    /// looked tolerant until every entry was malformed: the list decoded to
+    /// empty, and empty is how a session says it has nothing left to wait for
+    /// — so a bad payload could announce a completion that never happened.
+    func testEntryWithoutIdIsKeptUnderASyntheticOne() throws {
         let event = try decode("""
         {"hook_event_name": "Stop", "session_id": "s1", "background_tasks": [
           {"type": "shell", "description": "no id here"},
           {"id": "keep", "type": "subagent"}
         ]}
         """)
-        XCTAssertEqual(event.backgroundTasks?.map(\.id), ["keep"])
+        let tasks = try XCTUnwrap(event.backgroundTasks)
+        XCTAssertEqual(tasks.count, 2)
+        XCTAssertEqual(tasks[0].description, "no id here")
+        XCTAssertEqual(tasks[1].id, "keep")
+        // The synthetic id must not collide with a real agent id, so the row
+        // is counted and drawn but never claims a live action.
+        XCTAssertTrue(tasks[0].id.hasPrefix("unidentified-"))
+    }
+
+    /// The failure that motivated it: work declared, nothing decodable.
+    func testAnAllMalformedListIsStillWorkInFlight() throws {
+        let event = try decode("""
+        {"hook_event_name": "Stop", "session_id": "s1", "background_tasks": [
+          {"type": "shell"}, {"type": "subagent"}
+        ]}
+        """)
+        XCTAssertEqual(event.backgroundTasks?.count, 2)
+    }
+
+    /// Duplicate ids reach SwiftUI as duplicate identities.
+    func testRepeatedIdsCollapse() throws {
+        let event = try decode("""
+        {"hook_event_name": "Stop", "session_id": "s1", "background_tasks": [
+          {"id": "same", "type": "shell", "description": "first"},
+          {"id": "same", "type": "shell", "description": "second"}
+        ]}
+        """)
+        XCTAssertEqual(event.backgroundTasks?.count, 1)
+        XCTAssertEqual(event.backgroundTasks?.first?.description, "first")
     }
 
     func testUnknownTypeIsKeptVerbatim() throws {
@@ -128,6 +158,13 @@ final class BackgroundTaskTests: XCTestCase {
     func testShellLabelIsNilWhenNothingMatches() {
         XCTAssertNil(
             BackgroundTask(id: "x", kind: "shell", command: "npm run build").providerLabel
+        )
+    }
+
+    /// Whole words only: a substring search called this one a Claude job.
+    func testShellLabelDoesNotMatchInsideAWord() {
+        XCTAssertNil(
+            BackgroundTask(id: "x", kind: "shell", command: "/opt/notclaude/run").providerLabel
         )
     }
 

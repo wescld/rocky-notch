@@ -73,13 +73,10 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         self.model = model
     }
 
-    /// Decodes one payload entry. Returns nil without an `id`: it is the join
-    /// key for tool events, and a row we cannot address is a row we cannot
-    /// keep honest. Decoding entry by entry (rather than the array as a whole)
-    /// means one malformed task costs its own row, not the whole list.
-    public init?(payload: JSONValue) {
-        guard let id = payload["id"]?.stringValue, !id.isEmpty else { return nil }
-        self.id = id
+    /// Decodes one payload entry, falling back to a synthetic id.
+    public init(payload: JSONValue, fallbackID: String) {
+        let reported = payload["id"]?.stringValue
+        id = (reported?.isEmpty == false ? reported! : fallbackID)
         kind = payload["type"]?.stringValue ?? "task"
         status = payload["status"]?.stringValue
         description = payload["description"]?.stringValue
@@ -87,6 +84,30 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         command = payload["command"]?.stringValue
         lastAction = nil
         model = nil
+    }
+
+    /// Decodes the whole `background_tasks` array.
+    ///
+    /// An entry without a usable id is kept under a synthetic one rather than
+    /// dropped. Dropping looked tolerant — one bad entry costing only its own
+    /// row — but a payload whose entries were *all* malformed then decoded to
+    /// an empty list, and an empty list is precisely how a session says it has
+    /// nothing left to wait for. A malformed entry could therefore announce a
+    /// completion that never happened. A synthetic id never matches an
+    /// `agent_id`, which is the right behaviour for work we cannot identify:
+    /// the row is counted and drawn, it just never claims a live action.
+    ///
+    /// Repeated ids collapse to the first, because they reach SwiftUI as
+    /// duplicate identities and two rows sharing one would conflate updates.
+    public static func list(from payloads: [JSONValue]) -> [BackgroundTask] {
+        var seen: Set<String> = []
+        var tasks: [BackgroundTask] = []
+        for (index, payload) in payloads.enumerated() {
+            let task = BackgroundTask(payload: payload, fallbackID: "unidentified-\(index)")
+            guard seen.insert(task.id).inserted else { continue }
+            tasks.append(task)
+        }
+        return tasks
     }
 
     public var isSubagent: Bool { kind == "subagent" }
@@ -145,8 +166,16 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
             if let agentType, !agentType.isEmpty { return agentType }
             return nil
         }
+        // Whole words only: a substring search called `/opt/notclaude/run` a
+        // Claude job. Splitting on non-alphanumerics keeps `mon-codex.sh`
+        // working, since the marker is still a token of its own there.
         let haystack = ((description ?? "") + " " + (command ?? "")).lowercased()
-        for (marker, label) in Self.providerMarkers where haystack.contains(marker) {
+        let words = Set(
+            haystack
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                .map(String.init)
+        )
+        for (marker, label) in Self.providerMarkers where words.contains(marker) {
             return label
         }
         return nil

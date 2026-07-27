@@ -320,7 +320,13 @@ final class AgentHub: ObservableObject {
         if knownBefore.contains(sessionId), store.sessions[sessionId] == nil {
             transcripts.unwatch(sessionId: sessionId)
         }
-        resolveSubagentModels(sessionId: sessionId)
+        // Only when the agent just told us what is in flight. Running it on
+        // every event meant each subagent tool call spawned another scan and
+        // re-read every sidecar still missing — N events across M children
+        // became N×M concurrent reads of files that were not there yet.
+        if envelope.event.backgroundTasks != nil {
+            resolveSubagentModels(sessionId: sessionId)
+        }
         markPersistDirty()
 
         let session = store.sessions[envelope.event.sessionId]

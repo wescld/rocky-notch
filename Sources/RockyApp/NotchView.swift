@@ -419,8 +419,15 @@ struct SessionListView: View {
             } else {
                 ForEach(hub.sessions) { session in
                     if session.pending != nil {
-                        PendingSessionCard(session: session, hub: hub)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        VStack(spacing: 0) {
+                            PendingSessionCard(session: session, hub: hub)
+                            // A session can be blocked on the user *and* still
+                            // have agents running. Dropping the children while
+                            // the card is up removed that context at the moment
+                            // the user is being asked to decide something.
+                            DelegatedRows(session: session)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     } else if case .completion(let id) = attention, session.id == id {
                         // Featured as CompletionCard above; skip duplicate row.
                         EmptyView()
@@ -430,29 +437,7 @@ struct SessionListView: View {
                                 session: session,
                                 celebrating: hub.celebrating.contains(session.id)
                             )
-                            // The work the session handed off, nested under it:
-                            // a subagent belongs to its parent in a way a
-                            // delegated CLI (its own session, its own row) does
-                            // not, and flattening them would leave four rows
-                            // all named after the same project.
-                            //
-                            // Every child gets its own row. A shell's line
-                            // never moves — no hooks, no transcript to tail —
-                            // but "what was dispatched" is the question the
-                            // notch exists to answer, and a stale sentence
-                            // answers it where a count does not.
-                            let drawn = Array(
-                                session.backgroundTasks.prefix(NotchView.maxBackgroundRows)
-                            )
-                            let grouped = Array(
-                                session.backgroundTasks.dropFirst(drawn.count)
-                            )
-                            ForEach(drawn) { task in
-                                BackgroundTaskRow(task: task)
-                            }
-                            if !grouped.isEmpty {
-                                BackgroundTaskOverflowRow(tasks: grouped)
-                            }
+                            DelegatedRows(session: session)
                         }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
@@ -1086,6 +1071,32 @@ struct SessionRow: View {
         }
         .animation(.easeInOut(duration: 0.25), value: session.lastAction)
         .animation(.spring(duration: 0.3, bounce: 0.5), value: celebrating)
+    }
+}
+
+/// The work a session handed off, nested under it.
+///
+/// A subagent belongs to its parent in a way a delegated CLI — its own session,
+/// its own row — does not, and flattening them would leave four rows all named
+/// after the same project. Every child gets a line: a shell's never moves (no
+/// hooks, no transcript to tail), but "what was dispatched" is the question the
+/// notch exists to answer, and a stale sentence answers it where a count does
+/// not. Past the cap the remainder is grouped, never dropped silently.
+///
+/// One view, used under a plain row and under a pending card alike, so the two
+/// cannot drift apart.
+struct DelegatedRows: View {
+    let session: AgentSession
+
+    var body: some View {
+        let drawn = Array(session.backgroundTasks.prefix(NotchView.maxBackgroundRows))
+        let grouped = Array(session.backgroundTasks.dropFirst(drawn.count))
+        ForEach(drawn) { task in
+            BackgroundTaskRow(task: task)
+        }
+        if !grouped.isEmpty {
+            BackgroundTaskOverflowRow(tasks: grouped)
+        }
     }
 }
 

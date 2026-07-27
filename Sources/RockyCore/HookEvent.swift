@@ -340,7 +340,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         let raw = (try? c.decodeIfPresent([JSONValue].self, forKey: .backgroundTasks))
             ?? (try? c.decodeIfPresent([JSONValue].self, forKey: .backgroundTasksCamel))
         guard let raw = raw ?? nil else { return nil }
-        return raw.compactMap(BackgroundTask.init(payload:))
+        return BackgroundTask.list(from: raw)
     }
 
     private static func decodeOptionalString(
