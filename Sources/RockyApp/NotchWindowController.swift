@@ -106,7 +106,9 @@ final class NotchWindowController {
             hub: hub,
             state: state,
             notchWidth: m.notchWidth,
-            notchHeight: m.hasNotch ? m.notchHeight : 0
+            // metrics already supplies a synthetic height for notchless
+            // displays (the floating pill). Zeroing it left a 5pt-tall bar.
+            notchHeight: m.notchHeight
         )
         let hosting = NSHostingView(rootView: root)
         self.hosting = hosting
@@ -296,7 +298,7 @@ final class NotchWindowController {
         let m = screenMetrics ?? Self.metrics(for: targetScreen)
         return NotchView.capSize(
             notchWidth: m.notchWidth,
-            notchHeight: m.hasNotch ? m.notchHeight : 0
+            notchHeight: m.notchHeight
         )
     }
 
@@ -309,7 +311,7 @@ final class NotchWindowController {
         let size = NotchView.expandedSize(
             contentHeight: measuredContentHeight,
             notchWidth: m.notchWidth,
-            notchHeight: m.hasNotch ? m.notchHeight : 0
+            notchHeight: m.notchHeight
         )
         let ceiling = max(capSize().height, screen.frame.maxY - screen.visibleFrame.minY)
         return CGSize(width: size.width, height: min(size.height, ceiling))
@@ -337,7 +339,7 @@ final class NotchWindowController {
             // leave the view with the metrics captured at init.
             var root = hosting.rootView
             root.notchWidth = m.notchWidth
-            root.notchHeight = m.hasNotch ? m.notchHeight : 0
+            root.notchHeight = m.notchHeight
             hosting.rootView = root
         }
 
