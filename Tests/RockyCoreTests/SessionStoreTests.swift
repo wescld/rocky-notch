@@ -66,6 +66,29 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.sessions["s1"]?.waitingInputReason)
     }
 
+    /// The question the agent left us with was answered at the terminal. A
+    /// later Stop that carries no closing words of its own must not fall back
+    /// to that spent handoff and present it as the new one.
+    func testLiveActivityRetiresTheSpentHandoff() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(
+            envelope("Stop", lastAssistantMessage: "Which branch should I use?"),
+            at: t0 + 1
+        )
+        store.apply(envelope("Notification", type: "agent_needs_input"), at: t0 + 2)
+        XCTAssertEqual(store.sessions["s1"]?.lastAgentMessage, "Which branch should I use?")
+        XCTAssertEqual(store.sessions["s1"]?.handoffAsksSomething, true)
+
+        store.setLastAction("Bash: swift build", sessionId: "s1")
+        XCTAssertNil(store.sessions["s1"]?.lastAgentMessage)
+        XCTAssertEqual(store.sessions["s1"]?.handoffAsksSomething, false)
+
+        store.apply(envelope("Stop"), at: t0 + 3)
+        XCTAssertNil(store.sessions["s1"]?.lastAgentMessage)
+        XCTAssertEqual(store.sessions["s1"]?.handoffAsksSomething, false)
+    }
+
     func testTranscriptActivityLeavesAPendingPermissionUp() {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)

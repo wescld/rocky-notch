@@ -101,8 +101,14 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// earlier: the agent cannot be blocked on the user and running a tool at
     /// the same time. Only clears an input wait — a pending permission is a
     /// live card the user still has to decide, so it stays.
+    /// The handoff goes with the wait: work resumed, so whatever the agent
+    /// left us with was answered somewhere we could not see. Keeping it would
+    /// let a stale question resurface as the next turn's closing message,
+    /// since `Stop` only overwrites it when it carries one of its own.
     mutating func clearWaitForLiveActivity() {
         guard status == .waitingInput else { return }
+        lastAgentMessage = nil
+        handoffAsksSomething = false
         waitingInputReason = nil
         status = .running
     }
