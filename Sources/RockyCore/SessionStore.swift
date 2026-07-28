@@ -39,6 +39,12 @@ public enum WaitingInputReason: Equatable, Sendable {
 public struct AgentSession: Identifiable, Equatable, Sendable {
     public enum Status: Equatable, Sendable {
         case running
+        /// The turn ended, but the session left work in flight and will be
+        /// woken by it. Distinct from `idle` because the machine is busy and
+        /// from `running` because the main loop is parked: a session that
+        /// delegated must not be celebrated as finished, nor expire on the
+        /// short click-to-jump window while its agents are still working.
+        case delegating
         case waitingPermission
         case waitingInput
         case idle
@@ -85,6 +91,11 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// Set only by explicit "the agent is blocked" signals. `nil` while
     /// `status == .waitingInput` never happens: the two move together.
     public var waitingInputReason: WaitingInputReason?
+    /// Subagents, background shells and other work the session registered as
+    /// in flight. Reported wholesale on every `Stop` / `SubagentStop`, so the
+    /// list maintains itself: each child that finishes reannounces the rest,
+    /// and an empty list is the session saying it is finally done.
+    public var backgroundTasks: [BackgroundTask] = []
 
     public var projectName: String {
         if let title, !title.isEmpty { return title }
@@ -134,6 +145,15 @@ public struct SessionStore: Equatable, Sendable {
         }
     }
 
+    /// Where a session settles when a turn ends. Work it delegated means the
+    /// machine is still busy, so "at rest" is not the same as "done" — and
+    /// more than one event ends a turn (`Stop`, and the `idle_prompt`
+    /// notification that trails it), so the rule lives in one place rather
+    /// than in each of them.
+    static func restingStatus(of session: AgentSession) -> AgentSession.Status {
+        session.backgroundTasks.isEmpty ? .idle : .delegating
+    }
+
     /// Lower sorts first. Proven signals outrank the question hint, which in
     /// turn outranks work that needs nobody — a wrong hint costs a row one
     /// position, never a state change.
@@ -146,15 +166,25 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func apply(_ envelope: HookEnvelope, at date: Date) {
         let event = envelope.event
-        // Subagent hooks would duplicate the parent session; skip them.
-        guard event.agentId == nil else { return }
+        // Subagent hooks would duplicate the parent session, so they are
+        // dropped — with two exceptions that say something about the parent
+        // nothing else does. `SubagentStop` reports the work still in flight,
+        // and a subagent's own tool calls are the only live evidence that a
+        // parked session is still moving. The latter never enters the state
+        // machine: it annotates its own row and leaves.
+        if let agentId = event.agentId, event.kind != .subagentStop {
+            if event.kind == .postToolUse {
+                noteSubagentActivity(agentId: agentId, event: event, at: date)
+            }
+            return
+        }
 
         switch event.kind {
         case .sessionEnd:
             sessions[event.sessionId] = nil
             return
-        case .sessionStart, .stop, .notification, .permissionRequest,
-             .postToolUse, .userPromptSubmit, .unknown:
+        case .sessionStart, .stop, .subagentStop, .notification,
+             .permissionRequest, .postToolUse, .userPromptSubmit, .unknown:
             break
         }
 
@@ -194,6 +224,15 @@ public struct SessionStore: Equatable, Sendable {
             if session.cwd == nil, let wd = jump.workingDirectory {
                 session.cwd = wd
             }
+        }
+        // Stop and SubagentStop both carry the whole in-flight list, so it is
+        // replaced rather than accumulated — the agent is authoritative about
+        // what exists. Rocky's own enrichment survives the swap.
+        if let reported = event.backgroundTasks {
+            session.backgroundTasks = Self.merging(
+                existing: session.backgroundTasks,
+                reported: reported
+            )
         }
 
         switch event.kind {
@@ -235,9 +274,10 @@ public struct SessionStore: Equatable, Sendable {
                 // actually blocked on the user. Treating it as "needs you" would
                 // paint every finished session amber and bury the ones that do.
                 // It only confirms the turn ended; never downgrade a session
-                // that already reported an explicit block.
+                // that already reported an explicit block — or one still
+                // waiting on work it delegated, which this fires for too.
                 if session.waitingInputReason == nil {
-                    session.status = .idle
+                    session.status = Self.restingStatus(of: session)
                 }
             default:
                 break
@@ -269,7 +309,29 @@ public struct SessionStore: Equatable, Sendable {
             // ended blocked on the user. Only an unblocked turn is "done" —
             // otherwise Stop would erase a wait that arrived just before it.
             if session.waitingInputReason == nil {
-                session.status = .idle
+                session.status = Self.restingStatus(of: session)
+            }
+        case .subagentStop:
+            // The closing words on this event are the *subagent's*; the parent
+            // keeps its own. All that is taken from here is the refreshed
+            // in-flight list applied above — and where that leaves a session
+            // at rest, in both directions.
+            //
+            // Draining to empty is the obvious one. The other matters just as
+            // much: a relaunch restores a delegating session as idle with no
+            // list (Rocky cannot vouch for work it did not see start), and the
+            // next event is often a SubagentStop still carrying children. Only
+            // handling the drain left that session idle with children drawn
+            // under it — the "done · click to jump" over live agents this
+            // whole change exists to stop, back through another door.
+            //
+            // A session whose main loop is running, or which is blocked on the
+            // user, is not at rest and is left alone.
+            switch session.status {
+            case .running, .waitingPermission, .waitingInput:
+                break
+            case .idle, .delegating:
+                session.status = Self.restingStatus(of: session)
             }
         case .sessionEnd, .unknown:
             break
@@ -308,6 +370,62 @@ public struct SessionStore: Equatable, Sendable {
     public mutating func addTokens(_ tokens: Int, sessionId: String) {
         guard tokens > 0 else { return }
         sessions[sessionId]?.tokens += tokens
+    }
+
+    /// The model behind a subagent, resolved from its on-disk sidecar. Purely a
+    /// label ("Fable" instead of "general-purpose"); no state depends on it.
+    public mutating func setSubagentModel(
+        _ model: String,
+        agentId: String,
+        sessionId: String
+    ) {
+        guard let index = sessions[sessionId]?.backgroundTasks
+            .firstIndex(where: { $0.id == agentId })
+        else { return }
+        sessions[sessionId]?.backgroundTasks[index].model = model
+    }
+
+    /// A subagent ran a tool. Deliberately outside the state machine: it
+    /// annotates that child's row and refreshes the session clock, which is the
+    /// only live proof that a parked session is still moving.
+    private mutating func noteSubagentActivity(
+        agentId: String,
+        event: HookEvent,
+        at date: Date
+    ) {
+        guard var session = sessions[event.sessionId],
+              let index = session.backgroundTasks.firstIndex(where: { $0.id == agentId })
+        else { return }
+        if let toolName = event.toolName {
+            session.backgroundTasks[index].lastAction = TranscriptTail.friendly(
+                tool: toolName,
+                input: event.toolInput?.objectValue
+            )
+        }
+        let gap = date.timeIntervalSince(session.lastEventAt)
+        if gap > 0 {
+            session.activeSeconds += min(gap, 5 * 60)
+        }
+        session.lastEventAt = date
+        sessions[event.sessionId] = session
+    }
+
+    /// The payload decides *which* work exists; Rocky is the only source for
+    /// what that work is doing, so live actions and resolved models are carried
+    /// across a refresh instead of being reset by every child that finishes.
+    static func merging(
+        existing: [BackgroundTask],
+        reported: [BackgroundTask]
+    ) -> [BackgroundTask] {
+        guard !existing.isEmpty else { return reported }
+        let previous = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return reported.map { task in
+            guard let old = previous[task.id] else { return task }
+            var merged = task
+            merged.lastAction = task.lastAction ?? old.lastAction
+            merged.model = task.model ?? old.model
+            return merged
+        }
     }
 
     /// Called when a pending request was answered or timed out.
@@ -356,7 +474,9 @@ public struct SessionStore: Equatable, Sendable {
                 // stays until the agent or its host actually goes away.
                 // Expiring it because the user stepped out defeats the state.
                 limit = orphanTimeout
-            case .running, .waitingPermission:
+            case .running, .delegating, .waitingPermission:
+                // Delegating is work in progress: expiring it on the idle
+                // window would drop the row precisely while its agents run.
                 break
             }
             // No agent PID: cannot detect CLI exit, so cap whatever the status

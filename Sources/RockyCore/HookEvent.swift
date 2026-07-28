@@ -9,6 +9,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case sessionStart
         case sessionEnd
         case stop
+        /// A subagent finished. Only interesting for the `background_tasks` it
+        /// carries: it is the one event that reports what is still in flight
+        /// while the parent session sits parked.
+        case subagentStop
         case notification
         case permissionRequest
         case postToolUse
@@ -20,6 +24,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "SessionStart": self = .sessionStart
             case "SessionEnd": self = .sessionEnd
             case "Stop": self = .stop
+            case "SubagentStop": self = .subagentStop
             case "Notification": self = .notification
             // Grok/Cursor have no PermissionRequest; PreToolUse and Cursor's
             // beforeShellExecution / beforeMCPExecution map to the same
@@ -48,6 +53,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "sessionstart": return "SessionStart"
             case "sessionend": return "SessionEnd"
             case "stop", "stopfailure": return "Stop"
+            case "subagentstop": return "SubagentStop"
             case "notification": return "Notification"
             case "permissionrequest": return "PermissionRequest"
             case "pretooluse": return "PreToolUse"
@@ -85,6 +91,14 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public let prompt: String?
     /// Subagent events carry an agent id; we only track top-level sessions.
     public let agentId: String?
+    /// Subagent type ("general-purpose"). Populated on `SubagentStart` and on
+    /// a subagent's own tool events, but empty on `SubagentStop` — the name a
+    /// row displays comes from `backgroundTasks`, not from here.
+    public let agentType: String?
+    /// Work still in flight, on `Stop` / `SubagentStop`. Empty array and nil
+    /// mean different things: empty says the agent reported nothing pending,
+    /// nil says the agent never told us (older CLI, other provider).
+    public let backgroundTasks: [BackgroundTask]?
 
     public var kind: Kind { Kind(name: hookEventName) }
 
@@ -123,6 +137,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case prompt
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
+        case agentType = "agent_type"
+        case agentTypeCamel = "agentType"
+        case backgroundTasks = "background_tasks"
+        case backgroundTasksCamel = "backgroundTasks"
     }
 
     public init(from decoder: Decoder) throws {
@@ -181,6 +199,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
         )
         prompt = Self.decodeFlexiblePrompt(c, .prompt)
         agentId = try Self.decodeOptionalString(c, .agentId, .agentIdCamel)
+        agentType = try Self.decodeOptionalString(c, .agentType, .agentTypeCamel)
+        backgroundTasks = Self.decodeBackgroundTasks(c)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -201,6 +221,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
         try c.encodeIfPresent(lastAssistantMessage, forKey: .lastAssistantMessage)
         try c.encodeIfPresent(prompt, forKey: .prompt)
         try c.encodeIfPresent(agentId, forKey: .agentId)
+        try c.encodeIfPresent(agentType, forKey: .agentType)
+        // Re-encoded in Rocky's own shape rather than the payload's: this hop
+        // is hook → app, and `BackgroundTask` decodes both.
+        try c.encodeIfPresent(backgroundTasks, forKey: .backgroundTasks)
     }
 
     public init(
@@ -218,7 +242,9 @@ public struct HookEvent: Codable, Equatable, Sendable {
         sessionTitle: String? = nil,
         lastAssistantMessage: String? = nil,
         prompt: String? = nil,
-        agentId: String? = nil
+        agentId: String? = nil,
+        agentType: String? = nil,
+        backgroundTasks: [BackgroundTask]? = nil
     ) {
         self.sessionId = sessionId
         self.hookEventName = Kind.canonical(hookEventName)
@@ -235,6 +261,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
         self.lastAssistantMessage = lastAssistantMessage
         self.prompt = prompt
         self.agentId = agentId
+        self.agentType = agentType
+        self.backgroundTasks = backgroundTasks
     }
 
     /// Copy carrying the agent's closing words. Used when they have to be
@@ -255,7 +283,9 @@ public struct HookEvent: Codable, Equatable, Sendable {
             sessionTitle: sessionTitle,
             lastAssistantMessage: message,
             prompt: prompt,
-            agentId: agentId
+            agentId: agentId,
+            agentType: agentType,
+            backgroundTasks: backgroundTasks
         )
     }
 
@@ -275,7 +305,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
             return toolInput?["url"]?.stringValue ?? toolName
         case "WebSearch", "web_search", "SemanticSearch":
             return toolInput?["query"]?.stringValue ?? toolName
-        case "Task":
+        // Claude Code renamed Task to Agent; both spellings are in the wild.
+        case "Task", "Agent":
             return toolInput?["description"]?.stringValue
                 ?? toolInput?["prompt"]?.stringValue
                 ?? toolName
@@ -299,6 +330,17 @@ public struct HookEvent: Codable, Equatable, Sendable {
             keys[0],
             .init(codingPath: c.codingPath, debugDescription: "missing \(keys[0].stringValue)")
         )
+    }
+
+    /// Entry-by-entry so one malformed task costs its own row instead of the
+    /// whole list, and so the key spellings live in `BackgroundTask` alone.
+    private static func decodeBackgroundTasks(
+        _ c: KeyedDecodingContainer<CodingKeys>
+    ) -> [BackgroundTask]? {
+        let raw = (try? c.decodeIfPresent([JSONValue].self, forKey: .backgroundTasks))
+            ?? (try? c.decodeIfPresent([JSONValue].self, forKey: .backgroundTasksCamel))
+        guard let raw = raw ?? nil else { return nil }
+        return BackgroundTask.list(from: raw)
     }
 
     private static func decodeOptionalString(

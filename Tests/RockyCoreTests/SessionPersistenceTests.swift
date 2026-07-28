@@ -38,6 +38,83 @@ final class SessionPersistenceTests: XCTestCase {
         XCTAssertEqual(s.task, "fix the bug")
     }
 
+    /// The handoff is meant to outlive a bare "done" row by a quarter of an
+    /// hour; dropping it from the snapshot made a relaunch inside that window
+    /// silently downgrade the row to "done · click to jump".
+    func testHandoffSurvivesTheRoundTrip() throws {
+        var session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .idle,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        session.lastAgentMessage = "Quer que eu commite?"
+        session.handoffAsksSomething = true
+
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.lastAgentMessage, "Quer que eu commite?")
+        XCTAssertEqual(restored.first?.handoffAsksSomething, true)
+    }
+
+    /// Delegated work outlives the app that was watching it. Dropping the list
+    /// made a restored session claim "done" over running agents and fall back
+    /// to the short idle retention, which could prune it mid-flight — so the
+    /// list is carried across and the session comes back delegating.
+    func testDelegatingSurvivesTheRoundTrip() throws {
+        var session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .delegating,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        session.backgroundTasks = [
+            BackgroundTask(id: "ag1", kind: "subagent", description: "Fable review", model: "fable")
+        ]
+
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.status, .delegating)
+        XCTAssertEqual(restored.first?.backgroundTasks.map(\.id), ["ag1"])
+        // Enrichment travels too, so the row does not lose "Fable" on relaunch.
+        XCTAssertEqual(restored.first?.backgroundTasks.first?.model, "fable")
+    }
+
+    /// A delegating session whose list did not survive has nothing to show for
+    /// the claim, so it settles as idle rather than asserting invisible work.
+    func testDelegatingWithoutAListComesBackIdle() throws {
+        let session = AgentSession(
+            id: "s1",
+            agent: "claude-code",
+            cwd: "/tmp/proj",
+            hookPid: 1,
+            status: .delegating,
+            pending: nil,
+            lastEventAt: Date(),
+            title: nil,
+            model: nil,
+            terminalAppPid: nil,
+            transcriptPath: nil,
+            lastAction: nil
+        )
+        let restored = try SessionPersistence.decode(SessionPersistence.encode([session]))
+        XCTAssertEqual(restored.first?.status, .idle)
+    }
+
     func testDropsStaleSessions() throws {
         var old = AgentSession(
             id: "old",

@@ -19,6 +19,10 @@ struct NotchView: View {
 
     static let expandedWidth: CGFloat = 560
     static let rowHeight: CGFloat = 40
+    static let backgroundRowHeight: CGFloat = 20
+    /// A fan-out can be a dozen agents and the panel has no scroll, so the
+    /// nested rows are capped and the remainder is counted, never dropped.
+    static let maxBackgroundRows = 4
     static let wingWidth: CGFloat = 78
 
     /// The pill fused with the notch. Also the cap of the expanded island:
@@ -60,8 +64,12 @@ struct NotchView: View {
         }
     }
 
+    /// Drives Rocky in the closed cap, which is the only thing the user sees
+    /// without opening the notch — so it has to count delegated work too.
+    /// Showing him asleep over three running agents is the exact "nothing is
+    /// happening" this change exists to fix, surviving where it is most seen.
     private var anyRunning: Bool {
-        hub.sessions.contains { $0.status == .running }
+        hub.sessions.contains { $0.status == .running || $0.status == .delegating }
     }
 
     private var cap: CGSize {
@@ -445,21 +453,33 @@ struct SessionListView: View {
             } else {
                 ForEach(hub.sessions) { session in
                     if session.pending != nil {
-                        PendingSessionCard(session: session, hub: hub)
-                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        VStack(spacing: 0) {
+                            PendingSessionCard(session: session, hub: hub)
+                            // A session can be blocked on the user *and* still
+                            // have agents running. Dropping the children while
+                            // the card is up removed that context at the moment
+                            // the user is being asked to decide something.
+                            DelegatedRows(session: session)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                     } else if case .completion(let id) = attention, session.id == id {
                         // Featured as CompletionCard above; skip duplicate row.
                         EmptyView()
                     } else {
-                        SessionRow(
-                            session: session,
-                            celebrating: hub.celebrating.contains(session.id)
-                        )
+                        VStack(spacing: 0) {
+                            SessionRow(
+                                session: session,
+                                celebrating: hub.celebrating.contains(session.id)
+                            )
+                            DelegatedRows(session: session)
+                        }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
                 // Working agents = Rocky thinking/snacking; quiet = patrol.
-                BottomRocky(anyRunning: hub.sessions.contains { $0.status == .running })
+                BottomRocky(anyRunning: hub.sessions.contains {
+                    $0.status == .running || $0.status == .delegating
+                })
                     .padding(.horizontal, 10)
                     .padding(.top, 10)
                     .padding(.bottom, 4)
@@ -993,6 +1013,14 @@ enum SessionMeta {
         session.agent == "cursor" ? "In IDE" : "In terminal"
     }
 
+    /// Fallback subtitle for a session that parked without leaving words.
+    static func delegatedSummary(_ session: AgentSession) -> String {
+        let count = session.backgroundTasks.count
+        return count == 1
+            ? "1 running in background"
+            : "\(count) running in background"
+    }
+
     static func elapsed(_ session: AgentSession) -> String {
         let minutes = max(0, Int(Date().timeIntervalSince(session.lastEventAt) / 60))
         if minutes < 1 { return "now" }
@@ -1039,7 +1067,7 @@ struct SessionRow: View {
                     color: (showsQuestionHint ? Palette.amber : statusColor).opacity(0.7),
                     radius: 2
                 )
-                if session.status == .running {
+                if session.status == .running || session.status == .delegating {
                     RockyAnimatedSprite(size: 18)
                 }
             }
@@ -1060,6 +1088,17 @@ struct SessionRow: View {
                     Text("your turn in the terminal")
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.amber)
+                } else if session.status == .delegating, let message = session.lastAgentMessage {
+                    // The child rows below say what is running; the agent's
+                    // closing line says why the main loop stepped back.
+                    Text(message)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .lineLimit(1)
+                } else if session.status == .delegating {
+                    Text(SessionMeta.delegatedSummary(session))
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.green)
                 } else if session.status == .idle, let message = session.lastAgentMessage {
                     Text(message)
                         .font(.system(size: 10))
@@ -1079,6 +1118,11 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 8)
+            // Survives the notch being collapsed to a single row, which is the
+            // state the user is in when they glance at it.
+            if !session.backgroundTasks.isEmpty {
+                Chip(text: "↳\(session.backgroundTasks.count)")
+            }
             if let tokens = SessionMeta.tokens(session.tokens) {
                 Chip(text: tokens)
             }
@@ -1106,6 +1150,95 @@ struct SessionRow: View {
         }
         .animation(.easeInOut(duration: 0.25), value: session.lastAction)
         .animation(.spring(duration: 0.3, bounce: 0.5), value: celebrating)
+    }
+}
+
+/// The work a session handed off, nested under it.
+///
+/// A subagent belongs to its parent in a way a delegated CLI — its own session,
+/// its own row — does not, and flattening them would leave four rows all named
+/// after the same project. Every child gets a line: a shell's never moves (no
+/// hooks, no transcript to tail), but "what was dispatched" is the question the
+/// notch exists to answer, and a stale sentence answers it where a count does
+/// not. Past the cap the remainder is grouped, never dropped silently.
+///
+/// One view, used under a plain row and under a pending card alike, so the two
+/// cannot drift apart.
+struct DelegatedRows: View {
+    let session: AgentSession
+
+    var body: some View {
+        let drawn = Array(session.backgroundTasks.prefix(NotchView.maxBackgroundRows))
+        let grouped = Array(session.backgroundTasks.dropFirst(drawn.count))
+        ForEach(drawn) { task in
+            BackgroundTaskRow(task: task)
+        }
+        if !grouped.isEmpty {
+            BackgroundTaskOverflowRow(tasks: grouped)
+        }
+    }
+}
+
+/// One piece of work a session handed off. Quieter and narrower than a session
+/// row on purpose: it is not somewhere you can jump to, it is something you are
+/// being told about — and the eye should read the parent first.
+struct BackgroundTaskRow: View {
+    // Qualified: SwiftUI ships a `BackgroundTask` of its own.
+    let task: RockyCore.BackgroundTask
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text("↳")
+                .font(.system(size: 10))
+                .foregroundStyle(Palette.inkTertiary)
+            if let provider = task.providerLabel {
+                Text(provider)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Palette.inkSecondary)
+                    .lineLimit(1)
+            }
+            // The agent wrote this sentence for a human; nothing Rocky could
+            // synthesize from the task type would beat it.
+            Text(task.title)
+                .font(.system(size: 10))
+                .foregroundStyle(Palette.inkTertiary)
+                .lineLimit(1)
+            if let action = task.lastAction {
+                Text(action)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(Palette.green.opacity(0.7))
+                    .lineLimit(1)
+                    // Gives up its width first: the identity of the work
+                    // matters more than the tool it happens to be running.
+                    .layoutPriority(-1)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(.leading, 28)
+        .padding(.trailing, 10)
+        .frame(height: NotchView.backgroundRowHeight)
+    }
+}
+
+/// Rocky never silently truncates a list it claims to be showing — and where
+/// it groups, it still says who is in the group.
+struct BackgroundTaskOverflowRow: View {
+    let tasks: [RockyCore.BackgroundTask]
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Text("↳")
+                .font(.system(size: 10))
+                .foregroundStyle(Palette.inkTertiary)
+            Text(RockyCore.BackgroundTask.groupedLabel(tasks))
+                .font(.system(size: 10))
+                .foregroundStyle(Palette.inkTertiary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+        }
+        .padding(.leading, 28)
+        .padding(.trailing, 10)
+        .frame(height: NotchView.backgroundRowHeight)
     }
 }
 

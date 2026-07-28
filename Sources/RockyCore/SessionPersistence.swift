@@ -17,6 +17,23 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     public var tokens: Int
     public var activeSeconds: TimeInterval
     public var task: String?
+    /// The handoff outlives a bare "done" row by design
+    /// (`handoffRetentionTimeout`), so dropping it here made a relaunch inside
+    /// that window silently downgrade the row to "done · click to jump" and
+    /// lose the question ring. Optional so older snapshots still decode.
+    public var lastAgentMessage: String?
+    public var handoffAsksSomething: Bool?
+    /// Work that was in flight when the snapshot was taken.
+    ///
+    /// Leaving this out looked like the careful choice — Rocky cannot vouch
+    /// for work it did not see start. But the two ways of being wrong are not
+    /// equal. Kept, the worst case is a child shown for a few seconds after it
+    /// finished, and the next `Stop` corrects it. Dropped, the worst case is
+    /// the row announcing "done · click to jump" over agents that are still
+    /// running *and* falling back to the short idle retention, so it can be
+    /// pruned mid-flight. The second is the exact failure this status exists
+    /// to prevent, so the list is carried across.
+    public var backgroundTasks: [BackgroundTask]?
 
     public init(from session: AgentSession) {
         id = session.id
@@ -34,6 +51,9 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         tokens = session.tokens
         activeSeconds = session.activeSeconds
         task = session.task
+        lastAgentMessage = session.lastAgentMessage
+        handoffAsksSomething = session.handoffAsksSomething
+        backgroundTasks = session.backgroundTasks.isEmpty ? nil : session.backgroundTasks
     }
 
     public func asSession(now: Date = Date()) -> AgentSession {
@@ -56,8 +76,19 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         session.tokens = tokens
         session.activeSeconds = activeSeconds
         session.task = task
-        // Restored sessions are at best idle until a live hook re-attaches.
+        session.lastAgentMessage = lastAgentMessage
+        session.handoffAsksSomething = handoffAsksSomething ?? false
+        session.backgroundTasks = backgroundTasks ?? []
+        // Restored sessions are at best idle until a live hook re-attaches —
+        // a running main loop cannot be assumed to have survived, and a
+        // pending approval is never restored at all. Delegated work is the
+        // exception: it outlives the app that was watching it, so a session
+        // that still has a list comes back delegating. Anything the next
+        // `Stop` or `SubagentStop` disagrees with is corrected wholesale.
         if session.status == .waitingPermission || session.status == .running {
+            session.status = .idle
+        }
+        if session.status == .delegating, session.backgroundTasks.isEmpty {
             session.status = .idle
         }
         // Touch so prune doesn't instantly drop very old snapshots that
@@ -69,6 +100,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     private static func encodeStatus(_ status: AgentSession.Status) -> String {
         switch status {
         case .running: "running"
+        case .delegating: "delegating"
         case .waitingPermission: "waitingPermission"
         case .waitingInput: "waitingInput"
         case .idle: "idle"
@@ -78,6 +110,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     private static func decodeStatus(_ raw: String) -> AgentSession.Status {
         switch raw {
         case "running": .running
+        case "delegating": .delegating
         case "waitingPermission": .waitingPermission
         case "waitingInput": .waitingInput
         default: .idle
