@@ -397,7 +397,14 @@ struct NotchView: View {
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
 
     private var expandedContent: some View {
-        SessionListView(hub: hub, attention: state.attention, showsInsights: false)
+        SessionListView(
+            hub: hub,
+            attention: state.attention,
+            showsInsights: false,
+            expandedRows: state.expandedRows,
+            onToggleExpand: { state.toggleRow($0) },
+            onDismiss: { hub.dismiss(sessionId: $0) }
+        )
             .padding(.horizontal, 18)
             .colorScheme(.dark)
             .frame(width: Self.expandedWidth)
@@ -420,6 +427,13 @@ struct SessionListView: View {
     /// reveals empty space beside the hardware cutout. The menu bar card has
     /// no cap, so it keeps the inline header.
     var showsInsights = true
+    /// Accordion rows the user opened, and the toggle. Supplied by the notch
+    /// (which resizes the panel to fit); nil in the menu bar, where rows keep
+    /// the plain click-to-jump behaviour.
+    var expandedRows: Set<String> = []
+    var onToggleExpand: ((String) -> Void)? = nil
+    /// Clear a finished session from the panel (the row "×").
+    var onDismiss: ((String) -> Void)? = nil
 
     private var totalTokens: Int { hub.sessions.reduce(0) { $0 + $1.tokens } }
     private var totalWork: TimeInterval { hub.sessions.reduce(0) { $0 + $1.activeSeconds } }
@@ -469,7 +483,10 @@ struct SessionListView: View {
                         VStack(spacing: 0) {
                             SessionRow(
                                 session: session,
-                                celebrating: hub.celebrating.contains(session.id)
+                                celebrating: hub.celebrating.contains(session.id),
+                                expanded: expandedRows.contains(session.id),
+                                onToggleExpand: onToggleExpand.map { toggle in { toggle(session.id) } },
+                                onDismiss: onDismiss.map { dismiss in { dismiss(session.id) } }
                             )
                             DelegatedRows(session: session)
                         }
@@ -677,7 +694,7 @@ struct AgentLogo: View {
     /// Agent key (as stored on the session) → bundled `logo-<slug>.png`.
     static func slug(for agent: String) -> String? {
         switch agent {
-        case "claude-code": return "claude"
+        case "claude-code", "claude": return "claude"
         case "codex": return "codex"
         case "grok": return "grok"
         case "cursor": return "cursor"
@@ -1033,9 +1050,36 @@ enum SessionMeta {
 struct SessionRow: View {
     let session: AgentSession
     var celebrating = false
+    /// Accordion: whether this row is opened, and the toggle. When the toggle
+    /// is nil (menu bar) the row keeps plain click-to-jump.
+    var expanded = false
+    var onToggleExpand: (() -> Void)? = nil
+    var onDismiss: (() -> Void)? = nil
     @State private var hovering = false
 
+    /// Finished rows can be cleared from the panel; live ones cannot.
+    private var isDismissible: Bool {
+        onDismiss != nil && session.status == .idle
+    }
+
     private var statusColor: Color { Palette.status(session.status) }
+
+    /// The closing message that can be read in full by opening the row.
+    static func expandableMessage(_ session: AgentSession) -> String? {
+        guard session.status == .idle || session.status == .waitingInput,
+              let message = session.lastAgentMessage, !message.isEmpty
+        else { return nil }
+        return message
+    }
+
+    private var isExpandable: Bool {
+        onToggleExpand != nil && SessionRow.expandableMessage(session) != nil
+    }
+
+    private func jump() {
+        RockyVoice.shared.tap()
+        TerminalFocus.focus(session: session)
+    }
 
     /// A finished turn whose closing line asked something. Drawn as a hollow
     /// amber ring: same colour as the filled "waiting on you" dot, so scanning
@@ -1047,7 +1091,10 @@ struct SessionRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        // Alignment stays .center across expand/collapse: switching to .top
+        // isn't interpolatable, so the dot and trailing time would jump at the
+        // start of the animation instead of gliding with the growth.
+        HStack(alignment: .center, spacing: 10) {
             if celebrating {
                 RockyAnimatedSprite(prefix: "dance", fallback: "rocky-celebrating", fps: 10, size: 24)
                     .transition(.scale.combined(with: .opacity))
@@ -1083,7 +1130,7 @@ struct SessionRow: View {
                     Text(message)
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.amber)
-                        .lineLimit(1)
+                        .lineLimit(expanded ? 8 : 1)
                 } else if session.status == .waitingInput {
                     Text("your turn in the terminal")
                         .font(.system(size: 10))
@@ -1103,7 +1150,7 @@ struct SessionRow: View {
                     Text(message)
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.inkSecondary)
-                        .lineLimit(1)
+                        .lineLimit(expanded ? 8 : 1)
                 } else if session.status == .idle {
                     Text("done · click to jump")
                         .font(.system(size: 10))
@@ -1126,30 +1173,69 @@ struct SessionRow: View {
             if let tokens = SessionMeta.tokens(session.tokens) {
                 Chip(text: tokens)
             }
+            // While the row toggles open on click, the identity chips carry the
+            // jump-to-terminal action instead.
             AgentChip(session: session)
+                .contentShape(Rectangle())
+                .onTapGesture { if isExpandable { jump() } }
+                .help(isExpandable ? "Jump to terminal" : "")
             if let terminal = SessionMeta.terminalLabel(session) {
                 Chip(text: terminal)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if isExpandable { jump() } }
+                    .help(isExpandable ? "Jump to terminal" : "")
             }
-            Text(SessionMeta.elapsed(session))
-                .font(.system(size: 10))
-                .foregroundStyle(Palette.inkTertiary)
+            if isExpandable {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.inkTertiary)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
+            // Hovering a finished row swaps its elapsed time for a dismiss
+            // button, so ghosts can be cleared without waiting on retention.
+            if isDismissible, hovering {
+                Button(action: { onDismiss?() }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Palette.inkSecondary)
+                        .frame(width: 18, height: 18)
+                        .background(
+                            Circle().fill(Color.white.opacity(0.10))
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss this session")
+            } else {
+                Text(SessionMeta.elapsed(session))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Palette.inkTertiary)
+            }
         }
         .padding(.horizontal, 8)
-        .frame(height: NotchView.rowHeight)
+        .padding(.vertical, expanded ? 8 : 0)
+        .frame(minHeight: NotchView.rowHeight)
         .background(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.white.opacity(hovering ? 0.06 : 0))
         )
         .contentShape(Rectangle())
         .onTapGesture {
-            RockyVoice.shared.tap()
-            TerminalFocus.focus(session: session)
+            // Expandable rows toggle open on click (identity chips jump);
+            // everything else keeps the plain click-to-jump.
+            if isExpandable, let toggle = onToggleExpand {
+                RockyVoice.shared.tap()
+                toggle()
+            } else {
+                jump()
+            }
         }
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
         .animation(.easeInOut(duration: 0.25), value: session.lastAction)
         .animation(.spring(duration: 0.3, bounce: 0.5), value: celebrating)
+        .animation(.easeOut(duration: 0.28), value: expanded)
     }
 }
 

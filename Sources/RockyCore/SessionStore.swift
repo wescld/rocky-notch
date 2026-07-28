@@ -97,6 +97,22 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// and an empty list is the session saying it is finally done.
     public var backgroundTasks: [BackgroundTask] = []
 
+    /// Live activity (a tool call landing) outranks a wait we were told about
+    /// earlier: the agent cannot be blocked on the user and running a tool at
+    /// the same time. Only clears an input wait — a pending permission is a
+    /// live card the user still has to decide, so it stays.
+    /// The handoff goes with the wait: work resumed, so whatever the agent
+    /// left us with was answered somewhere we could not see. Keeping it would
+    /// let a stale question resurface as the next turn's closing message,
+    /// since `Stop` only overwrites it when it carries one of its own.
+    mutating func clearWaitForLiveActivity() {
+        guard status == .waitingInput else { return }
+        lastAgentMessage = nil
+        handoffAsksSomething = false
+        waitingInputReason = nil
+        status = .running
+    }
+
     public var projectName: String {
         if let title, !title.isEmpty { return title }
         guard let cwd else { return "session" }
@@ -288,6 +304,9 @@ public struct SessionStore: Equatable, Sendable {
             // up until the decision timeout.
             session.pending = nil
             if session.status == .waitingPermission { session.status = .running }
+            // Same reasoning for an explicit wait: the tool ran, so the block
+            // is over even though no prompt event told us so.
+            session.clearWaitForLiveActivity()
             // Kimi / OpenCode have no transcript for Rocky to tail; live
             // activity comes from PostToolUse (plugin bridge or hooks).
             if envelope.agent == "kimi-code" || envelope.agent == "opencode",
@@ -365,6 +384,12 @@ public struct SessionStore: Equatable, Sendable {
 
     public mutating func setLastAction(_ action: String, sessionId: String) {
         sessions[sessionId]?.lastAction = action
+        // A fresh tool call in the transcript is proof the agent is working, so
+        // whatever it was blocked on got answered somewhere we cannot see —
+        // approving a permission or picking an option at the terminal prompt
+        // fires no UserPromptSubmit, which used to leave the row amber for the
+        // rest of the session while its tokens ticked up.
+        sessions[sessionId]?.clearWaitForLiveActivity()
     }
 
     public mutating func addTokens(_ tokens: Int, sessionId: String) {
@@ -534,6 +559,15 @@ public struct SessionStore: Equatable, Sendable {
     /// sessions whose host PID was never resolved, so a `cursor-agent` CLI
     /// session running in a live terminal is left to the normal dead-host /
     /// orphan pruning instead of being killed the moment the GUI app is closed.
+    /// Drop a single session the user dismissed from the panel. Returns its
+    /// abandoned pending request id, if any, so the hub can cancel the timeout.
+    @discardableResult
+    public mutating func remove(id: String) -> String? {
+        guard let session = sessions[id] else { return nil }
+        sessions[id] = nil
+        return session.pending?.requestId
+    }
+
     /// Returns abandoned pending request ids.
     @discardableResult
     public mutating func removeSessions(

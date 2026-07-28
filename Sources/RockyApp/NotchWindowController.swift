@@ -41,6 +41,21 @@ final class NotchUIState: ObservableObject {
     /// the island is fully closed — otherwise Rocky's sprite timelines would
     /// keep animating behind a shut notch.
     var contentMounted: Bool { wantsExpanded || phase != .collapsed }
+
+    /// Session rows the user clicked open to read the full closing message,
+    /// accordion-style. Kept here rather than as row-local state so it survives
+    /// the console being torn down and remounted around the close animation.
+    /// The panel grows to fit on its own: the taller row is measured like any
+    /// other content, so nothing here has to predict its height.
+    @Published var expandedRows: Set<String> = []
+
+    func toggleRow(_ id: String) {
+        if expandedRows.contains(id) {
+            expandedRows.remove(id)
+        } else {
+            expandedRows.insert(id)
+        }
+    }
 }
 
 /// Owns the borderless panel that hugs the notch (or floats as a pill on
@@ -153,6 +168,12 @@ final class NotchWindowController {
         let pendingIds = Set(hub.sessions.compactMap { $0.pending?.requestId })
         revealedRequests.formIntersection(pendingIds)
         acknowledgedRequests.formIntersection(pendingIds)
+        // Forget accordion state for sessions that are gone, so a reused id
+        // never reopens on its own.
+        let liveIds = Set(hub.sessions.map(\.id))
+        if !state.expandedRows.isSubset(of: liveIds) {
+            state.expandedRows.formIntersection(liveIds)
+        }
         let hasNewPending = !pendingIds.subtracting(revealedRequests).isEmpty
 
         if hoverConfirmed {
@@ -425,6 +446,26 @@ final class NotchWindowController {
             // layout that no longer exists.
             self.hasFreshMeasurement = false
             self.applyFrame(self.capSize(), on: self.targetScreen)
+            self.settleHoverAfterShrink()
+        }
+    }
+
+    /// Reconcile hover with the real pointer after the panel shrinks.
+    ///
+    /// The window just moved out from under the pointer, and AppKit sends no
+    /// mouse-exit to a view that was pulled away rather than left: SwiftUI's
+    /// last word stays `hovering = true` with nothing able to contradict it,
+    /// since the pointer is no longer over the panel at all. The next sync then
+    /// reads that stale flag as intent and reopens the console from empty
+    /// space. Ask where the pointer actually is instead of trusting the last
+    /// event we happened to receive.
+    private func settleHoverAfterShrink() {
+        let inside = mouseInsidePresentedIsland()
+        if state.hovering != inside { state.hovering = inside }
+        if !inside {
+            hoverConfirmed = false
+            hoverIntentTimer?.invalidate()
+            hoverIntentTimer = nil
         }
     }
 

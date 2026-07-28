@@ -103,6 +103,24 @@ final class AgentHub: ObservableObject {
     ///
     /// Codex/Grok have no reliable SessionEnd. Without (1)–(5), closed sessions
     /// stick in the notch while Warp stays open.
+    /// Dismiss a session from the panel on the user's request (the row "×").
+    /// Idle rows otherwise linger on their retention timeout; this clears a
+    /// ghost immediately without waiting for the agent to send SessionEnd.
+    func dismiss(sessionId: String) {
+        // Dismissing a row that still holds a permission request leaves a hook
+        // blocked on the other end. Release it the way every other teardown
+        // path does, so the agent falls back to its own prompt instead of
+        // burning the full decision deadline.
+        if let requestId = store.remove(id: sessionId) {
+            timeoutTasks[requestId]?.cancel()
+            timeoutTasks[requestId] = nil
+            server.reply(.passthrough, to: requestId)
+        }
+        transcripts.unwatch(sessionId: sessionId)
+        celebrating.remove(sessionId)
+        markPersistDirty()
+    }
+
     private func pruneStaleSessions() {
         let before = Set(store.sessions.keys)
         store.pruneOrphans(now: Date())
