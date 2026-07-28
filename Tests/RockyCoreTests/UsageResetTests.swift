@@ -78,6 +78,38 @@ final class UsageResetTests: XCTestCase {
         XCTAssertTrue(text.contains(expected), "expected month \(expected) in \(text)")
     }
 
+    /// Once a reset lands past the next midnight-plus-six-days — from 6.5 days
+    /// out, with a noon anchor — the weekday name comes back around to today's
+    /// and the phrase reads as a time later today rather than a week away.
+    /// The anchor is a Friday, so none of these may render as "Fri".
+    func testNearlySevenDaysOutDoesNotRenderTodaysWeekday() {
+        let weekday = DateFormatter()
+        weekday.locale = enUS
+        weekday.calendar = utcCalendar()
+        weekday.timeZone = TimeZone(identifier: "UTC")!
+        weekday.setLocalizedDateFormatFromTemplate("EEE")
+        let today = weekday.string(from: now)
+
+        // 6.5, 6.75 and ~6.96 days out — across the collision band.
+        for hours in [156, 162, 167] {
+            let text = describe(now.addingTimeInterval(Double(hours) * 3600)) ?? ""
+            XCTAssertFalse(
+                text.contains(today),
+                "\(hours)h out reads as today (\(today)) in \(text)"
+            )
+        }
+    }
+
+    /// The weekday window still reaches its own edge: just under six days is a
+    /// weekday, six days exactly has already fallen back to a date.
+    func testWeekdayWindowEndsAtSixDays() {
+        let justInside = describe(now.addingTimeInterval(6 * 86400 - 60)) ?? ""
+        XCTAssertTrue(justInside.contains("Thu"), "expected a weekday in \(justInside)")
+
+        let atLimit = describe(now.addingTimeInterval(6 * 86400)) ?? ""
+        XCTAssertTrue(atLimit.contains("Jul"), "expected a date in \(atLimit)")
+    }
+
     func testTwelveHourLocaleShowsMeridiem() {
         // Noon UTC, en_US → 12h clock with AM/PM.
         let text = describe(now.addingTimeInterval(3 * 86400)) ?? ""
