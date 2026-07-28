@@ -218,8 +218,13 @@ struct NotchView: View {
 
     private var openWings: some View {
         HStack(spacing: 0) {
+            // Same rule as the right strip: `fixedSize` pins Rocky, never the
+            // row, or the ViewThatFits beside him is offered unbounded width
+            // and stops shedding. Horizontal only — he still stretches
+            // vertically to stay centred in the cap.
             HStack(spacing: 9) {
                 rockyWing
+                    .fixedSize(horizontal: true, vertical: false)
                 // Sheds the work time, then the tokens, on narrower notches.
                 ViewThatFits(in: .horizontal) {
                     capStats(includeWork: true)
@@ -228,7 +233,6 @@ struct NotchView: View {
                 }
                 .transition(.opacity)
             }
-            .fixedSize()
             .frame(width: sideWidth + capInset, alignment: .leading)
 
             Spacer(minLength: 0)
@@ -236,17 +240,23 @@ struct NotchView: View {
             // Account limits and the count share the right strip; the count
             // keeps the wing it holds at rest, so it never travels on opening.
             // The middle is deliberately left empty — the cutout covers it.
+            // `fixedSize` belongs on the count alone, never on the row: applied
+            // to the row it proposes an unbounded width to its children, and a
+            // ViewThatFits offered unbounded width concludes its widest option
+            // fits every time. It would never degrade, and the overflow would
+            // spill past the trailing alignment straight under the cutout.
             HStack(spacing: 9) {
                 ViewThatFits(in: .horizontal) {
-                    capUsage(compact: false)
-                    capUsage(compact: true)
+                    capUsage(.full)
+                    capUsage(.hottestAgent)
+                    capUsage(.hottestSession)
                     EmptyView()
                 }
                 .transition(.opacity)
                 countChip
+                    .fixedSize()
                     .matchedGeometryEffect(id: "count", in: capNamespace)
             }
-            .fixedSize()
             .padding(.trailing, capInset)
             .frame(width: sideWidth + capInset, alignment: .trailing)
         }
@@ -317,31 +327,55 @@ struct NotchView: View {
         }
     }
 
-    /// `compact` drops the Codex window, keeping the Claude one, when the
-    /// strip beside the notch cannot hold both.
+    /// How much of the account strip the space beside the notch can hold.
+    /// Sheds an agent first, then the weekly figures. What survives a squeeze
+    /// is whichever account is closest to running out, never a fixed one:
+    /// dropping a spent account to keep a calm one would hide the very figure
+    /// the colour rule exists to raise.
+    private enum UsageDensity {
+        case full
+        case hottestAgent
+        case hottestSession
+    }
+
     @ViewBuilder
-    private func capUsage(compact: Bool) -> some View {
-        let claude = Preferences.showAccountUsage ? hub.claudeUsage : nil
-        let codex = (Preferences.showAccountUsage && !compact) ? hub.codexUsage : nil
+    private func capUsage(_ density: UsageDensity) -> some View {
+        let showUsage = Preferences.showAccountUsage
+        let claude = showUsage ? hub.claudeUsage : nil
+        let codex = showUsage ? hub.codexUsage : nil
+        let claudeSession = claude?.fiveHour
+        let codexSession = codex?.primary
+        let weeklyFits = density != .hottestSession
+
+        // Rank by each account's own worst window, then let the ranking decide
+        // only who survives — never the running order. Chips that reshuffle as
+        // the figures drift would cost the glance-and-know the strip is for.
+        let bothFit = density == .full
+        let claudeKeeps = UsageHeat.keepsFirst(
+            claudeSession == nil
+                ? nil
+                : UsageHeat.peak([claudeSession?.usedPercentage, claude?.sevenDay?.usedPercentage]),
+            over: codexSession == nil
+                ? nil
+                : UsageHeat.peak([codexSession?.usedPercentage, codex?.secondary?.usedPercentage])
+        )
+
         HStack(spacing: 5) {
-            if let five = claude?.fiveHour {
-                HStack(spacing: 3) {
-                    AgentLogo(agent: "claude-code", size: 11)
-                    Text("\(five.roundedUsedPercentage)% 5h")
-                }
-                .foregroundStyle(five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
-                .help("Claude account usage")
+            if let claudeSession, bothFit || claudeKeeps {
+                AccountUsageChip(
+                    claude: claudeSession,
+                    weekly: weeklyFits ? claude?.sevenDay : nil
+                )
             }
-            if let primary = codex?.primary {
-                if claude?.fiveHour != nil {
-                    Text("·").foregroundStyle(Palette.inkTertiary)
-                }
-                HStack(spacing: 3) {
-                    AgentLogo(agent: "codex", size: 11)
-                    Text("\(primary.roundedUsedPercentage)% \(primary.label)")
-                }
-                .foregroundStyle(primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary)
-                .help("Codex account usage")
+            // No dot between the agents here, unlike the panel: each chip opens
+            // with its own logo, which separates them well enough, and the
+            // glyph costs more width than the strip beside a 209pt cutout can
+            // spare once both windows show.
+            if let codexSession, bothFit || !claudeKeeps {
+                AccountUsageChip(
+                    codex: codexSession,
+                    weekly: weeklyFits ? codex?.secondary : nil
+                )
             }
         }
         .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -458,32 +492,20 @@ struct SessionListView: View {
                         Text(work).foregroundStyle(Palette.inkSecondary)
                     }
                 }
+                // The panel is not fighting the cutout for width, so both
+                // windows always show here — the cap may have had to shed one,
+                // and the same figure must not read two ways on one screen.
                 if let five = claude?.fiveHour {
                     if hasTokens || hasWork {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    HStack(spacing: 3) {
-                        AgentLogo(agent: "claude-code", size: 11)
-                        Text("\(five.roundedUsedPercentage)% 5h")
-                    }
-                    .foregroundStyle(
-                        five.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                    )
-                    .help("Claude account usage")
+                    AccountUsageChip(claude: five, weekly: claude?.sevenDay)
                 }
                 if let primary = codex?.primary {
                     if hasTokens || hasWork || hasClaude {
                         Text("·").foregroundStyle(Palette.inkTertiary)
                     }
-                    // Sample: logo + "13% 5h" (primary short window)
-                    HStack(spacing: 3) {
-                        AgentLogo(agent: "codex", size: 11)
-                        Text("\(primary.roundedUsedPercentage)% \(primary.label)")
-                    }
-                    .foregroundStyle(
-                        primary.usedPercentage >= 80 ? Palette.amber : Palette.inkSecondary
-                    )
-                    .help("Codex account usage")
+                    AccountUsageChip(codex: primary, weekly: codex?.secondary)
                 }
                 Spacer()
             }
@@ -564,6 +586,63 @@ struct TokenIcon: View {
                 .font(.system(size: size * 0.8))
                 .foregroundStyle(Palette.green)
         }
+    }
+}
+
+/// One agent's account reading: its logo, the session figure, and — when the
+/// caller has room for it — the weekly figure sharing that same logo.
+///
+/// The window label is dropped once both figures show, and so is the second
+/// percent sign: the first one sets the unit for the pair, and on a 209pt
+/// cutout that one glyph is the difference between both agents fitting beside
+/// the notch and one of them being shed entirely.
+///
+/// Colour follows the hotter of the two windows, so a spent week warns through
+/// a calm session instead of hiding behind it.
+struct AccountUsageChip: View {
+    private let agent: String
+    private let session: Int
+    private let sessionHeat: Double
+    private let sessionLabel: String
+    private let weeklyRounded: Int?
+    private let weeklyHeat: Double?
+    private let help: String
+
+    init(claude session: ClaudeUsageWindow, weekly: ClaudeUsageWindow?) {
+        agent = "claude-code"
+        self.session = session.roundedUsedPercentage
+        sessionHeat = session.usedPercentage
+        sessionLabel = "5h"
+        weeklyRounded = weekly?.roundedUsedPercentage
+        weeklyHeat = weekly?.usedPercentage
+        help = "Claude account usage"
+    }
+
+    init(codex session: CodexUsageWindow, weekly: CodexUsageWindow?) {
+        agent = "codex"
+        self.session = session.roundedUsedPercentage
+        sessionHeat = session.usedPercentage
+        sessionLabel = session.label
+        weeklyRounded = weekly?.roundedUsedPercentage
+        weeklyHeat = weekly?.usedPercentage
+        help = "Codex account usage"
+    }
+
+    var body: some View {
+        HStack(spacing: 3) {
+            AgentLogo(agent: agent, size: 11)
+            if let weeklyRounded {
+                Text("\(session)%·\(weeklyRounded)w")
+            } else {
+                Text("\(session)% \(sessionLabel)")
+            }
+        }
+        .foregroundStyle(
+            UsageHeat.isHot([sessionHeat, weeklyHeat])
+                ? Palette.amber
+                : Palette.inkSecondary
+        )
+        .help(help)
     }
 }
 

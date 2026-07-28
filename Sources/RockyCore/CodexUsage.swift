@@ -51,8 +51,13 @@ public struct CodexUsageSnapshot: Equatable, Codable, Sendable {
 
     public var isEmpty: Bool { windows.isEmpty }
 
-    /// Short window first (Codex emits primary then secondary).
-    public var primary: CodexUsageWindow? { windows.first }
+    /// The short window. Matched by key, not by position: an account that only
+    /// reports `secondary` would otherwise surface its weekly figure here and
+    /// read as the session window.
+    public var primary: CodexUsageWindow? { windows.first { $0.key == "primary" } }
+
+    /// The long window (weekly on most plans).
+    public var secondary: CodexUsageWindow? { windows.first { $0.key == "secondary" } }
 }
 
 /// Reads Codex account rate limits from local `rollout-*.jsonl` session files.
