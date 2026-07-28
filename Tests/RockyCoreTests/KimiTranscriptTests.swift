@@ -67,6 +67,29 @@ final class KimiTranscriptTests: XCTestCase {
         XCTAssertEqual(KimiTranscript.lastAssistantText(inTail: chunk), "íntegro")
     }
 
+    /// The tail begins at a byte offset, so the cut can land *inside* a
+    /// character rather than merely mid-line — and then there is no partial
+    /// line to skip, only stray bytes. Both halves of an "ã" must still yield
+    /// the intact record that follows it.
+    func testSurvivesACutInsideAMultibyteCharacter() {
+        let bytes = tail([
+            loopEvent("content.part", text: "decisão"),
+            loopEvent("content.part", text: "Posso seguir?"),
+        ])
+        // "ã" encodes as 0xC3 0xA3; cutting at the second byte orphans it.
+        guard let lead = Array(bytes).firstIndex(of: 0xC3) else {
+            return XCTFail("expected a multi-byte character in the fixture")
+        }
+
+        for cut in [lead, lead + 1] {
+            XCTAssertEqual(
+                KimiTranscript.lastAssistantText(inTail: Data(bytes.dropFirst(cut))),
+                "Posso seguir?",
+                "lost the message when cut at byte \(cut)"
+            )
+        }
+    }
+
     func testIgnoresUnrelatedRecords() {
         let chunk = tail([
             #"{"type":"usage.record","tokens":42}"#,

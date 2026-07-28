@@ -62,7 +62,12 @@ public enum KimiTranscript {
     /// anything before the last tool call is discarded — that earlier prose is
     /// narration ("let me check X"), not the handoff.
     public static func lastAssistantText(inTail chunk: Data) -> String? {
-        guard let text = String(data: chunk, encoding: .utf8) else { return nil }
+        // Decoded leniently on purpose: the tail starts at a byte offset, which
+        // can land inside a multi-byte character. A validating decode would
+        // reject the whole chunk over those stray bytes and lose an intact
+        // message further down. The replacement character lands in the leading
+        // line, which is discarded below for not starting with `{`.
+        let text = String(decoding: chunk, as: UTF8.self)
         var parts: [String] = []
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
