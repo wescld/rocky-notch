@@ -54,6 +54,82 @@ public enum SessionDiscovery {
         return (claude + codex).sorted { $0.lastEventAt > $1.lastEventAt }
     }
 
+    /// Drops discovered rows whose agent has no live process anywhere near the
+    /// directory they were found in.
+    ///
+    /// Discovery reads transcripts, and a transcript outlives the session that
+    /// wrote it — nothing in the file says whether that agent is still running.
+    /// So every launch reseeded sessions the user had already closed, and the
+    /// notch claimed work that had been over for an hour.
+    ///
+    /// The rule is deliberately weak, because a wrong drop costs a real row:
+    /// a session is kept unless *no* process of its agent is running in that
+    /// directory, in one above it, or in one below it. That still cannot tell
+    /// two sessions in the same folder apart — there it keeps both — but it
+    /// settles the case that actually misleads, where the agent is not running
+    /// there at all.
+    ///
+    /// `workingDirectories` returning nil means "cannot tell"; those sessions
+    /// are kept untouched.
+    public static func filterToLiveAgents(
+        _ sessions: [AgentSession],
+        home: String = NSHomeDirectory(),
+        workingDirectories: (String) -> Set<String>?
+    ) -> [AgentSession] {
+        var cache: [String: Set<String>?] = [:]
+        return sessions.filter { session in
+            guard let cwd = session.cwd, !cwd.isEmpty else { return true }
+            let directories = cache[session.agent] ?? {
+                let looked = workingDirectories(session.agent)
+                cache[session.agent] = looked
+                return looked
+            }()
+            guard let directories else { return true }
+            return directories.contains { directory in
+                // An agent sitting in the home folder — a launcher shim, or a
+                // session started before cd-ing anywhere — is under every
+                // project on the machine, so containment from there would
+                // vouch for all of them and the filter would do nothing at
+                // all. Measured: exactly this made a known-dead row survive.
+                isUmbrella(directory, home: home)
+                    ? canonicalPath(directory) == canonicalPath(cwd)
+                    : sharesTree(directory, cwd)
+            }
+        }
+    }
+
+    /// Too broad to identify a project, so it may only vouch for itself.
+    static func isUmbrella(_ path: String, home: String) -> Bool {
+        let canonical = canonicalPath(path)
+        return canonical == "/" || canonical == canonicalPath(home)
+    }
+
+    /// Same directory, or one contains the other. Compared by path boundary so
+    /// `/a/web` is not treated as living inside `/a/web-app`.
+    ///
+    /// Both sides are canonicalized first: the kernel reports a process's
+    /// directory through the firmlink (`/private/tmp/…`) while a transcript
+    /// records the path the user typed (`/tmp/…`), and comparing those raw
+    /// would drop a live session as dead. The rest of the codebase already
+    /// normalizes this pair — see `WarpSQLiteReader.cwdLookupCandidates` and
+    /// the transcript path in `makeObservationalSession`.
+    static func sharesTree(_ lhs: String, _ rhs: String) -> Bool {
+        let left = canonicalPath(lhs)
+        let right = canonicalPath(rhs)
+        return left == right || left.hasPrefix(right + "/") || right.hasPrefix(left + "/")
+    }
+
+    /// Collapses the `/private` firmlink prefix and any `..` / trailing slash,
+    /// so two spellings of the same directory compare equal.
+    static func canonicalPath(_ path: String) -> String {
+        let standardized = (path as NSString).standardizingPath
+        for pair in ["/private/tmp", "/private/var"] where standardized == pair
+            || standardized.hasPrefix(pair + "/") {
+            return String(standardized.dropFirst("/private".count))
+        }
+        return standardized
+    }
+
     // MARK: - Claude
 
     public static func discoverClaude(
@@ -286,7 +362,12 @@ public enum SessionDiscovery {
                 if let value = payload["model"] as? String, !value.isEmpty {
                     model = value
                 }
-                if let value = payload["cwd"] as? String, !value.isEmpty, cwd == nil {
+                // Latest wins. `session_meta` records where the session was
+                // born, but `codex resume` can restart it somewhere else and
+                // only `turn_context` says so — keeping the birthplace shows
+                // the wrong project name, and now also compares a live agent
+                // against a directory it left, which reads as "not running".
+                if let value = payload["cwd"] as? String, !value.isEmpty {
                     cwd = value
                 }
             } else if type == "event_msg" {

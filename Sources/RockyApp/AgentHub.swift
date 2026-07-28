@@ -150,8 +150,20 @@ final class AgentHub: ObservableObject {
             }
             return true
         }
-        store.restore(alive)
-        for session in alive where session.agent == "claude-code" {
+        // The PID checks above can only speak for rows that resolved one. A row
+        // with neither PID is a discovery-seeded guess that got persisted, and
+        // restoring it unchecked resurrects exactly what the discovery filter
+        // exists to stop — the snapshot is loaded first, and `store.restore`
+        // only fills missing ids, so the filtered scan can never take it back.
+        // Same shape `pruneOrphans` already treats as purely observational.
+        let tracked = alive.filter { $0.agentProcessPid != nil || $0.terminalAppPid != nil }
+        let observational = SessionDiscovery.filterToLiveAgents(
+            alive.filter { $0.agentProcessPid == nil && $0.terminalAppPid == nil },
+            workingDirectories: { ProcessAncestry.agentWorkingDirectories(for: $0) }
+        )
+        let restorable = tracked + observational
+        store.restore(restorable)
+        for session in restorable where session.agent == "claude-code" {
             if let path = session.transcriptPath {
                 transcripts.watch(sessionId: session.id, path: path)
             }
@@ -162,7 +174,13 @@ final class AgentHub: ObservableObject {
     /// Never overwrites a live (or already-restored) session id.
     private func discoverSessionsFromTranscripts() {
         Task.detached(priority: .utility) {
-            let found = SessionDiscovery.discoverRecent()
+            // A transcript outlives the session that wrote it, so the scan is
+            // checked against the process table before anything is seeded —
+            // otherwise every relaunch resurrects work the user already closed.
+            let found = SessionDiscovery.filterToLiveAgents(
+                SessionDiscovery.discoverRecent(),
+                workingDirectories: { ProcessAncestry.agentWorkingDirectories(for: $0) }
+            )
             guard !found.isEmpty else { return }
             await MainActor.run { [weak self] in
                 guard let self else { return }
