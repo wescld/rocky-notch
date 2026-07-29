@@ -504,8 +504,14 @@ extension AgentIntegration {
 // MARK: - Window
 
 /// Owns the (single) settings window.
+///
+/// Rocky runs as an accessory (no Dock icon) for the notch / menu-bar life.
+/// While Settings is open we temporarily become a regular app so the window
+/// behaves like any other: it stays up when the user clicks elsewhere, shows
+/// in Cmd-Tab, and only goes away when they close it. Closing drops us back
+/// to accessory so Rocky stays out of the Dock again.
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
 
     func show(hub: AgentHub, integrations: [AgentIntegration]) {
@@ -517,6 +523,7 @@ final class SettingsWindowController {
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.setContentSize(NSSize(width: 660, height: 480))
             window.isReleasedWhenClosed = false
+            window.delegate = self
             window.center()
             self.window = window
         }
@@ -524,7 +531,15 @@ final class SettingsWindowController {
         if let hosting = window?.contentViewController as? NSHostingController<SettingsView> {
             hosting.rootView = SettingsView(hub: hub, integrations: integrations)
         }
-        NSApp.activate()
+        // Regular while Settings is up; accessory again on close (see below).
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // Only Settings promotes us to regular; notch / menu-bar panels stay
+        // as nonactivating status items and do not need a Dock presence.
+        NSApp.setActivationPolicy(.accessory)
     }
 }
