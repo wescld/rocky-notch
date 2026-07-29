@@ -130,6 +130,19 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         return names.count > maxNames ? "\(base) · \(shown) …" : "\(base) · \(shown)"
     }
 
+    /// What the row standing in for the rest of the list reads, in either
+    /// state of the accordion.
+    ///
+    /// Closed, it names what is hidden — the grouped line, unchanged. Open,
+    /// there is nothing hidden left to name, so claiming a remainder would be
+    /// a lie; the line says what the click does instead. A fan-out past even
+    /// the opened cap keeps naming its remainder, because that group is still
+    /// real and the chevron already says which way the click goes.
+    public static func overflowLabel(remaining: [BackgroundTask], expanded: Bool) -> String {
+        guard remaining.isEmpty else { return groupedLabel(remaining) }
+        return expanded ? "show fewer" : ""
+    }
+
     /// Names what the group *is*, because a bare count reads as "two more of
     /// something" and leaves the user to guess. Shell and subagent are the
     /// cases that actually occur; anything mixed or unknown stays generic

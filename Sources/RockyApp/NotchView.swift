@@ -23,6 +23,12 @@ struct NotchView: View {
     /// A fan-out can be a dozen agents and the panel has no scroll, so the
     /// nested rows are capped and the remainder is counted, never dropped.
     static let maxBackgroundRows = 4
+    /// The cap once the user opens the group, which is a wider allowance for
+    /// something they explicitly asked to see — not an unlimited one. The
+    /// panel is clamped to the display and cannot scroll, so a fan-out of
+    /// thirty would push the rows below it off the bottom edge; past this the
+    /// remainder keeps being grouped, exactly as it is when closed.
+    static let maxExpandedBackgroundRows = 12
     static let wingWidth: CGFloat = 78
 
     /// The pill fused with the notch. Also the cap of the expanded island:
@@ -403,6 +409,8 @@ struct NotchView: View {
             showsInsights: false,
             expandedRows: state.expandedRows,
             onToggleExpand: { state.toggleRow($0) },
+            expandedDelegations: state.expandedDelegations,
+            onToggleDelegation: { state.toggleDelegation($0) },
             onDismiss: { hub.dismiss(sessionId: $0) }
         )
             .padding(.horizontal, 18)
@@ -432,6 +440,11 @@ struct SessionListView: View {
     /// the plain click-to-jump behaviour.
     var expandedRows: Set<String> = []
     var onToggleExpand: ((String) -> Void)? = nil
+    /// Sessions whose delegated work is opened past the resting cap, and the
+    /// toggle. Same deal as `expandedRows`: only the notch can grow to fit, so
+    /// the menu bar card leaves the group closed.
+    var expandedDelegations: Set<String> = []
+    var onToggleDelegation: ((String) -> Void)? = nil
     /// Clear a finished session from the panel (the row "×").
     var onDismiss: ((String) -> Void)? = nil
 
@@ -473,7 +486,13 @@ struct SessionListView: View {
                             // have agents running. Dropping the children while
                             // the card is up removed that context at the moment
                             // the user is being asked to decide something.
-                            DelegatedRows(session: session)
+                            DelegatedRows(
+                                session: session,
+                                expanded: expandedDelegations.contains(session.id),
+                                onToggleExpand: onToggleDelegation.map { toggle in
+                                    { toggle(session.id) }
+                                }
+                            )
                         }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     } else if case .completion(let id) = attention, session.id == id {
@@ -488,7 +507,13 @@ struct SessionListView: View {
                                 onToggleExpand: onToggleExpand.map { toggle in { toggle(session.id) } },
                                 onDismiss: onDismiss.map { dismiss in { dismiss(session.id) } }
                             )
-                            DelegatedRows(session: session)
+                            DelegatedRows(
+                                session: session,
+                                expanded: expandedDelegations.contains(session.id),
+                                onToggleExpand: onToggleDelegation.map { toggle in
+                                    { toggle(session.id) }
+                                }
+                            )
                         }
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
@@ -1252,15 +1277,30 @@ struct SessionRow: View {
 /// cannot drift apart.
 struct DelegatedRows: View {
     let session: AgentSession
+    /// Whether the user opened the group, and the toggle. Nil where the
+    /// surface cannot resize itself (the menu bar card), which leaves the
+    /// resting cap and the grouped line exactly as they were.
+    var expanded = false
+    var onToggleExpand: (() -> Void)? = nil
 
     var body: some View {
-        let drawn = Array(session.backgroundTasks.prefix(NotchView.maxBackgroundRows))
+        let cap = expanded ? NotchView.maxExpandedBackgroundRows : NotchView.maxBackgroundRows
+        let drawn = Array(session.backgroundTasks.prefix(cap))
         let grouped = Array(session.backgroundTasks.dropFirst(drawn.count))
+        // Open with nothing left over, the line has no count to carry — but it
+        // is still the only way back, so it stays as long as there is anything
+        // the resting cap would have hidden. A fan-out that finished down to
+        // four rows drops it: there is no longer a group to collapse.
+        let collapsible = expanded && session.backgroundTasks.count > NotchView.maxBackgroundRows
         ForEach(drawn) { task in
             BackgroundTaskRow(task: task)
         }
-        if !grouped.isEmpty {
-            BackgroundTaskOverflowRow(tasks: grouped)
+        if !grouped.isEmpty || collapsible {
+            BackgroundTaskOverflowRow(
+                tasks: grouped,
+                expanded: expanded,
+                onToggle: onToggleExpand
+            )
         }
     }
 }
@@ -1308,23 +1348,52 @@ struct BackgroundTaskRow: View {
 
 /// Rocky never silently truncates a list it claims to be showing — and where
 /// it groups, it still says who is in the group.
+///
+/// It is also the handle for the group: the only child line with nothing to
+/// jump to, so the click is free to open the rest of the fan-out in place. The
+/// chevron appears only where the click does something, which is the same rule
+/// the session row follows.
 struct BackgroundTaskOverflowRow: View {
     let tasks: [RockyCore.BackgroundTask]
+    var expanded = false
+    var onToggle: (() -> Void)? = nil
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 7) {
             Text("↳")
                 .font(.system(size: 10))
                 .foregroundStyle(Palette.inkTertiary)
-            Text(RockyCore.BackgroundTask.groupedLabel(tasks))
+            Text(RockyCore.BackgroundTask.overflowLabel(remaining: tasks, expanded: expanded))
                 .font(.system(size: 10))
                 .foregroundStyle(Palette.inkTertiary)
                 .lineLimit(1)
+            if onToggle != nil {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(Palette.inkTertiary)
+                    .rotationEffect(.degrees(expanded ? 180 : 0))
+            }
             Spacer(minLength: 4)
         }
         .padding(.leading, 28)
         .padding(.trailing, 10)
         .frame(height: NotchView.backgroundRowHeight)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(hovering && onToggle != nil ? 0.05 : 0))
+                .padding(.leading, 22)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard let onToggle else { return }
+            RockyVoice.shared.tap()
+            onToggle()
+        }
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+        }
+        .help(onToggle == nil ? "" : (expanded ? "Show fewer" : "Show every agent"))
     }
 }
 
