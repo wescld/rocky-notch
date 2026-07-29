@@ -240,6 +240,46 @@ final class BackgroundTaskTests: XCTestCase {
         )
     }
 
+    // MARK: - Overflow row
+
+    /// Closed, the line is the grouped one: what is hidden, and who is in it.
+    func testOverflowLineNamesTheHiddenGroupWhileClosed() {
+        let tasks = (0..<2).map {
+            BackgroundTask(id: "ag\($0)", kind: "subagent", model: "sonnet")
+        }
+        XCTAssertEqual(
+            BackgroundTask.overflowLabel(remaining: tasks, expanded: false),
+            "2 more agents · Sonnet"
+        )
+    }
+
+    /// Opened, nothing is hidden, so the line cannot claim a remainder — it
+    /// says what the click does instead.
+    func testOverflowLineOffersTheWayBackWhenNothingIsHidden() {
+        XCTAssertEqual(
+            BackgroundTask.overflowLabel(remaining: [], expanded: true),
+            "show fewer"
+        )
+    }
+
+    /// A fan-out past even the opened cap still has a real group to name; the
+    /// chevron carries the direction of the click.
+    func testOverflowLineStillNamesAGroupThatSurvivesExpanding() {
+        let tasks = (0..<4).map {
+            BackgroundTask(id: "ag\($0)", kind: "subagent", agentType: "Explore")
+        }
+        XCTAssertEqual(
+            BackgroundTask.overflowLabel(remaining: tasks, expanded: true),
+            "4 more agents · Explore"
+        )
+    }
+
+    /// Closed with nothing left over there is no row at all, so the label has
+    /// nothing to say — it must not invent a count.
+    func testOverflowLineIsEmptyWhenClosedWithNothingHidden() {
+        XCTAssertEqual(BackgroundTask.overflowLabel(remaining: [], expanded: false), "")
+    }
+
     // MARK: - Subagent sidecar
 
     func testMetaPathIsDerivedFromTheParentTranscript() {

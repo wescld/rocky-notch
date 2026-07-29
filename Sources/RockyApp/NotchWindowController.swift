@@ -49,11 +49,36 @@ final class NotchUIState: ObservableObject {
     /// other content, so nothing here has to predict its height.
     @Published var expandedRows: Set<String> = []
 
+    /// Sessions whose delegated work the user opened past the resting cap.
+    /// A separate set from `expandedRows`: a session can have its handoff open
+    /// and its fan-out collapsed, or the reverse, and one set could not say
+    /// which of the two the user asked for.
+    @Published var expandedDelegations: Set<String> = []
+
     func toggleRow(_ id: String) {
-        if expandedRows.contains(id) {
-            expandedRows.remove(id)
+        toggle(id, in: &expandedRows)
+    }
+
+    func toggleDelegation(_ id: String) {
+        toggle(id, in: &expandedDelegations)
+    }
+
+    private func toggle(_ id: String, in set: inout Set<String>) {
+        if set.contains(id) {
+            set.remove(id)
         } else {
-            expandedRows.insert(id)
+            set.insert(id)
+        }
+    }
+
+    /// Drop accordion state for sessions that are gone, so a reused id never
+    /// reopens on its own.
+    func forgetAccordions(outside liveIds: Set<String>) {
+        if !expandedRows.isSubset(of: liveIds) {
+            expandedRows.formIntersection(liveIds)
+        }
+        if !expandedDelegations.isSubset(of: liveIds) {
+            expandedDelegations.formIntersection(liveIds)
         }
     }
 }
@@ -164,16 +189,10 @@ final class NotchWindowController {
 
     private func syncAndLayout() {
         updateHoverIntent()
-
         let pendingIds = Set(hub.sessions.compactMap { $0.pending?.requestId })
         revealedRequests.formIntersection(pendingIds)
         acknowledgedRequests.formIntersection(pendingIds)
-        // Forget accordion state for sessions that are gone, so a reused id
-        // never reopens on its own.
-        let liveIds = Set(hub.sessions.map(\.id))
-        if !state.expandedRows.isSubset(of: liveIds) {
-            state.expandedRows.formIntersection(liveIds)
-        }
+        state.forgetAccordions(outside: Set(hub.sessions.map(\.id)))
         let hasNewPending = !pendingIds.subtracting(revealedRequests).isEmpty
 
         if hoverConfirmed {
