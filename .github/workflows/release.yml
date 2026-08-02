@@ -38,12 +38,15 @@ jobs:
 
       - name: Compute version and build number
         id: v
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
+          set -euo pipefail
           echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
           latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
           latest=${latest:-v0.1.0}
           IFS=. read -r major minor patch <<< "${latest#v}"
-          case "${{ inputs.bump }}" in
+          case "$BUMP" in
             major) major=$((major+1)); minor=0; patch=0 ;;
             minor) minor=$((minor+1)); patch=0 ;;
             *)     patch=$((patch+1)) ;;
@@ -51,12 +54,22 @@ jobs:
           echo "version=$major.$minor.$patch" >> "$GITHUB_OUTPUT"
 
       - name: Stamp version and build number
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: |
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.v.outputs.version }}" Support/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.v.outputs.build }}" Support/Info.plist
-          if [ -n "${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" ]; then
-            /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" Support/Info.plist \
-              || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}" Support/Info.plist
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" Support/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Support/Info.plist
+          if [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then
+            /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" Support/Info.plist \
+              || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" Support/Info.plist
+            # The repo ships automatic checks off so local builds never start
+            # Sparkle. A build that carries the public key is a real release and
+            # is the only one allowed to look for updates on its own.
+            /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks true" Support/Info.plist \
+              || /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" Support/Info.plist
           fi
 
       - name: Detect signing secrets
@@ -81,16 +94,17 @@ jobs:
           elif [ -n "$APPLE_ID" ] && [ -n "$APP_PW" ] && [ -n "$TEAM" ]; then
             can_notary=true
           fi
+          if [ "$can_sign" = true ] && [ "$can_notary" = true ]; then
+            mode=notarized
+          elif [ "$can_sign" = true ]; then
+            mode=signed
+          else
+            mode=adhoc
+          fi
           echo "can_sign=$can_sign" >> "$GITHUB_OUTPUT"
           echo "can_notary=$can_notary" >> "$GITHUB_OUTPUT"
-          if [ "$can_sign" = true ] && [ "$can_notary" = true ]; then
-            echo "mode=notarized" >> "$GITHUB_OUTPUT"
-          elif [ "$can_sign" = true ]; then
-            echo "mode=signed" >> "$GITHUB_OUTPUT"
-          else
-            echo "mode=adhoc" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Release signing mode: $( [ "$can_sign" = true ] && [ "$can_notary" = true ] && echo notarized || { [ "$can_sign" = true ] && echo signed || echo adhoc; } )"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Release signing mode: $mode"
 
       - name: Tests
         run: swift test
@@ -127,8 +141,10 @@ jobs:
           fi
           echo "Using identity: $IDENTITY"
           scripts/codesign-app.sh dist/Rocky.app "$IDENTITY"
+          # Only the path is needed later, by the cleanup step. The password is
+          # not a repository secret, so GitHub would not mask it in any later
+          # step that happened to print the environment.
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Notarize and staple
         if: steps.signing.outputs.mode == 'notarized'
@@ -182,33 +198,45 @@ jobs:
 
       - name: Package zip
         id: pkg
+        env:
+          VER: ${{ steps.v.outputs.version }}
         run: |
-          ZIP="dist/Rocky-${{ steps.v.outputs.version }}.zip"
+          set -euo pipefail
+          ZIP="dist/Rocky-${VER}.zip"
           ditto -c -k --keepParent dist/Rocky.app "$ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
+      # SUFeedURL points at releases/latest, so whatever appcast this job
+      # uploads becomes the feed every installed copy polls. An unsigned one
+      # from an adhoc run would be rejected by clients that carry the public
+      # key, and those users would stop receiving updates until the next
+      # signed release. Only a notarized run is allowed to touch the feed.
       - name: Generate appcast
+        if: steps.signing.outputs.mode == 'notarized'
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          REPO: ${{ github.repository }}
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
         run: |
-          REPO="${{ github.repository }}"
-          VER="${{ steps.v.outputs.version }}"
-          BUILD="${{ steps.v.outputs.build }}"
+          set -euo pipefail
           URL="https://github.com/${REPO}/releases/download/v${VER}/Rocky-${VER}.zip"
           scripts/generate-appcast.sh \
             --version "$VER" \
             --build "$BUILD" \
             --url "$URL" \
-            --zip "${{ steps.pkg.outputs.zip }}" \
+            --zip "$ZIP" \
             --out dist/appcast.xml
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ steps.signing.outputs.mode }}
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
         run: |
-          VER="${{ steps.v.outputs.version }}"
-          BUILD="${{ steps.v.outputs.build }}"
+          set -euo pipefail
           {
             echo "## Install"
             echo ""
@@ -235,10 +263,14 @@ jobs:
             echo "Build ${BUILD} · signing mode: \`${MODE}\`."
           } > notes.md
 
-          ASSETS=(
-            "dist/Rocky-${VER}.zip"
-            dist/appcast.xml
-          )
+          # Only a notarized run produces an appcast; anything else ships the
+          # zip alone and leaves the update feed of installed copies intact.
+          ASSETS=("dist/Rocky-${VER}.zip")
+          if [ -f dist/appcast.xml ]; then
+            ASSETS+=(dist/appcast.xml)
+          else
+            echo "No appcast for this run; the update feed is left untouched."
+          fi
           gh release create "v${VER}" \
             "${ASSETS[@]}" \
             --title "Rocky ${VER}" \
