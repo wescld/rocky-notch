@@ -65,10 +65,9 @@ release: app
 	@test -n "$(SIGN)" || { echo 'Set SIGN="Developer ID Application: … (TEAMID)"'; exit 1; }
 	# Sign nested Sparkle helpers, then the app (hardened runtime for notarization).
 	scripts/codesign-app.sh "$(APP)" "$(SIGN)"
-	ditto -c -k --keepParent $(APP) dist/Rocky.zip
-	xcrun notarytool submit dist/Rocky.zip \
-		--keychain-profile rocky-notary --wait
-	xcrun stapler staple $(APP)
+	# Same script CI runs, so a rejected local build fails the same way and
+	# prints the same log instead of surfacing as a generic stapler error.
+	scripts/notarize-app.sh "$(APP)" --keychain-profile rocky-notary
 	ditto -c -k --keepParent $(APP) dist/Rocky.zip
 	@echo "release pronto: dist/Rocky.zip"
 

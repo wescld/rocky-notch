@@ -15,6 +15,8 @@ final class UpdateChecker {
     private var updaterController: SPUStandardUpdaterController?
     /// True when Sparkle is fully configured (feed URL + Ed25519 public key).
     private(set) var isAvailable = false
+    /// Sparkle expects `start()` exactly once per updater.
+    private var didStartUpdater = false
 
     private init() {}
 
@@ -43,12 +45,14 @@ final class UpdateChecker {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        didStartUpdater = false
         #else
         updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        didStartUpdater = true
         #endif
         isAvailable = updaterController != nil
     }
@@ -63,9 +67,13 @@ final class UpdateChecker {
         // it lives here rather than in the menu handler.
         NSApp.activate()
         #if DEBUG
-        // Lazy-start on first manual check in DEBUG.
-        if !updaterController.updater.sessionInProgress {
+        // Lazy-start on first manual check in DEBUG. sessionInProgress only
+        // reports a check that is in flight and goes back to false once it
+        // finishes, so gating on it would start the updater again on the
+        // second check. Track it ourselves.
+        if !didStartUpdater {
             try? updaterController.updater.start()
+            didStartUpdater = true
         }
         #endif
         updaterController.checkForUpdates(sender)

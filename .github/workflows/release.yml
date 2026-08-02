@@ -111,7 +111,7 @@ jobs:
 
       - name: Build app
         run: |
-          chmod +x scripts/codesign-app.sh scripts/generate-appcast.sh
+          chmod +x scripts/codesign-app.sh scripts/generate-appcast.sh scripts/notarize-app.sh
           make app
 
       - name: Import certificate and codesign
@@ -157,10 +157,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          ditto -c -k --keepParent dist/Rocky.app dist/Rocky-notary.zip
-
-          # API key wins when present; Apple ID is the fallback. Keeping the
-          # auth flags in one array means submit and log always agree.
+          # API key wins when present; Apple ID is the fallback. The flags go
+          # straight to scripts/notarize-app.sh, the same one make release runs,
+          # so submit, log, staple and the verdict check never drift apart.
           if [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
             KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
             echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
@@ -171,29 +170,7 @@ jobs:
             echo "Notary auth: Apple ID + app-specific password"
           fi
 
-          # notarytool can exit 0 on a rejected submission, which would leave
-          # stapler to fail with an error that says nothing about the cause.
-          # Read the verdict ourselves and print Apple's log when it is not
-          # Accepted — that log names the offending binary.
-          RESULT=$(xcrun notarytool submit dist/Rocky-notary.zip "${AUTH[@]}" --wait --output-format json)
-          echo "$RESULT"
-          STATUS=$(printf '%s' "$RESULT" | plutil -extract status raw -o - - 2>/dev/null || echo unknown)
-          SUBMISSION_ID=$(printf '%s' "$RESULT" | plutil -extract id raw -o - - 2>/dev/null || echo "")
-
-          if [ "$STATUS" != "Accepted" ]; then
-            echo "::error::Notarization failed with status: $STATUS"
-            if [ -n "$SUBMISSION_ID" ]; then
-              xcrun notarytool log "$SUBMISSION_ID" "${AUTH[@]}" || true
-            fi
-            exit 1
-          fi
-
-          xcrun stapler staple dist/Rocky.app
-          # Prove the ticket is embedded before it ships; a stapled app must
-          # validate with no network, which is how users will launch it.
-          xcrun stapler validate dist/Rocky.app
-          spctl -a -vvv -t exec dist/Rocky.app
-          rm -f dist/Rocky-notary.zip
+          scripts/notarize-app.sh dist/Rocky.app "${AUTH[@]}"
           if [ -n "${KEY_PATH:-}" ]; then rm -f "$KEY_PATH"; fi
 
       - name: Package zip
