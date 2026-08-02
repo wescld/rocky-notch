@@ -26,7 +26,11 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-	<!-- Sparkle 2: appcast hosted as a release asset (see docs/releasing.md). -->
+	<!-- Shown when macOS asks to let Rocky control your terminal. Required for
+	     the Automation prompt to appear at all (TerminalFocus tab jumping). -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Rocky brings the terminal tab that is waiting on you to the front.</string>
+	<!-- Sparkle 2: appcast is uploaded as an asset of each GitHub release. -->
 	<key>SUFeedURL</key>
 	<string>https://github.com/wescld/rocky-notch/releases/latest/download/appcast.xml</string>
 	<!-- Public Ed25519 key from `make sparkle-keys` / generate_keys. CI can
