@@ -38,12 +38,18 @@ if [[ -d "$SPARKLE" ]]; then
     sign "$xpc"
   done < <(find "$SPARKLE" -name '*.xpc' -print0 2>/dev/null || true)
 
-  if [[ -e "$SPARKLE/Versions/B/Autoupdate" ]]; then
-    sign "$SPARKLE/Versions/B/Autoupdate"
-  fi
-  if [[ -d "$SPARKLE/Versions/B/Updater.app" ]]; then
-    sign "$SPARKLE/Versions/B/Updater.app"
-  fi
+  # Follow Versions/Current rather than naming a version directory. Sparkle 2
+  # ships Versions/B today, and hardcoding it means a future layout would skip
+  # these two silently, leaving Sparkle's own signature inside a bundle that
+  # claims to be ours. They are required, so a miss is an error.
+  CURRENT="$SPARKLE/Versions/Current"
+  for helper in Autoupdate Updater.app; do
+    if [[ ! -e "$CURRENT/$helper" ]]; then
+      echo "error: $helper not found under $CURRENT — Sparkle layout changed" >&2
+      exit 1
+    fi
+    sign "$CURRENT/$helper"
+  done
   sign "$SPARKLE"
 fi
 

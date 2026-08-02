@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Sparkle
 
@@ -56,6 +57,11 @@ final class UpdateChecker {
     /// No-op when Sparkle is not configured (local builds).
     func checkForUpdates(_ sender: Any? = nil) {
         guard isAvailable, let updaterController else { return }
+        // Rocky is LSUIElement: it never becomes the front app on its own, so
+        // Sparkle's window would open behind whatever you were using and the
+        // click would look like it did nothing. Both call sites need this, so
+        // it lives here rather than in the menu handler.
+        NSApp.activate()
         #if DEBUG
         // Lazy-start on first manual check in DEBUG.
         if !updaterController.updater.sessionInProgress {

@@ -263,16 +263,22 @@ jobs:
             echo "Build ${BUILD} · signing mode: \`${MODE}\`."
           } > notes.md
 
-          # Only a notarized run produces an appcast; anything else ships the
-          # zip alone and leaves the update feed of installed copies intact.
+          # Only a notarized run produces an appcast. Anything else must also
+          # stay out of "latest": SUFeedURL resolves through releases/latest, so
+          # a release without an appcast would answer 404 to every installed
+          # copy. GitHub skips prereleases when it picks latest, which keeps the
+          # feed pointing at the last notarized release.
           ASSETS=("dist/Rocky-${VER}.zip")
+          FLAGS=()
           if [ -f dist/appcast.xml ]; then
             ASSETS+=(dist/appcast.xml)
           else
-            echo "No appcast for this run; the update feed is left untouched."
+            FLAGS+=(--prerelease)
+            echo "No appcast for this run; publishing as a prerelease so the update feed keeps pointing at the last notarized release."
           fi
           gh release create "v${VER}" \
             "${ASSETS[@]}" \
+            "${FLAGS[@]+"${FLAGS[@]}"}" \
             --title "Rocky ${VER}" \
             --notes-file notes.md \
             --generate-notes
