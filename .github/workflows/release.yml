@@ -27,8 +27,6 @@ permissions:
 # Sparkle (optional, for in-app update signatures):
 #   SPARKLE_PRIVATE_KEY        Ed25519 private key string from generate_keys -x
 #   SPARKLE_PUBLIC_ED_KEY      Matching public key (also baked into Info.plist)
-#
-# Full walkthrough: docs/releasing.md
 
 jobs:
   release:
@@ -142,24 +140,45 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          set -euo pipefail
           ditto -c -k --keepParent dist/Rocky.app dist/Rocky-notary.zip
+
+          # API key wins when present; Apple ID is the fallback. Keeping the
+          # auth flags in one array means submit and log always agree.
           if [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
             KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
             echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
-            xcrun notarytool submit dist/Rocky-notary.zip \
-              --key "$KEY_PATH" \
-              --key-id "$APPLE_API_KEY_ID" \
-              --issuer "$APPLE_API_ISSUER" \
-              --wait
+            AUTH=(--key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+            echo "Notary auth: App Store Connect API key"
           else
-            xcrun notarytool submit dist/Rocky-notary.zip \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait
+            AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
+            echo "Notary auth: Apple ID + app-specific password"
           fi
+
+          # notarytool can exit 0 on a rejected submission, which would leave
+          # stapler to fail with an error that says nothing about the cause.
+          # Read the verdict ourselves and print Apple's log when it is not
+          # Accepted — that log names the offending binary.
+          RESULT=$(xcrun notarytool submit dist/Rocky-notary.zip "${AUTH[@]}" --wait --output-format json)
+          echo "$RESULT"
+          STATUS=$(printf '%s' "$RESULT" | plutil -extract status raw -o - - 2>/dev/null || echo unknown)
+          SUBMISSION_ID=$(printf '%s' "$RESULT" | plutil -extract id raw -o - - 2>/dev/null || echo "")
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization failed with status: $STATUS"
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" "${AUTH[@]}" || true
+            fi
+            exit 1
+          fi
+
           xcrun stapler staple dist/Rocky.app
+          # Prove the ticket is embedded before it ships; a stapled app must
+          # validate with no network, which is how users will launch it.
+          xcrun stapler validate dist/Rocky.app
+          spctl -a -vvv -t exec dist/Rocky.app
           rm -f dist/Rocky-notary.zip
+          if [ -n "${KEY_PATH:-}" ]; then rm -f "$KEY_PATH"; fi
 
       - name: Package zip
         id: pkg
