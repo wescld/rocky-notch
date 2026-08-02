@@ -88,8 +88,14 @@ try_sign() {
 
 if [[ -n "$SIGN_UPDATE" ]]; then
   if [[ -n "$PRIVATE_KEY_INLINE" ]]; then
-    # -s takes the raw private key string (CI secret).
-    ED_SIGNATURE=$(try_sign "$SIGN_UPDATE" -p -s "$PRIVATE_KEY_INLINE" "$ZIP" || true)
+    # Never hand the key to sign_update as an argument: it would sit in the
+    # process arguments, readable by any local process through ps for as long
+    # as the call runs. Pass it in a file only this user can read instead.
+    KEY_TMP=$(mktemp)
+    chmod 600 "$KEY_TMP"
+    trap 'rm -f "$KEY_TMP"' EXIT
+    printf '%s' "$PRIVATE_KEY_INLINE" >"$KEY_TMP"
+    ED_SIGNATURE=$(try_sign "$SIGN_UPDATE" -p --ed-key-file "$KEY_TMP" "$ZIP" || true)
   elif [[ -n "$PRIVATE_KEY_FILE" && -f "$PRIVATE_KEY_FILE" ]]; then
     ED_SIGNATURE=$(try_sign "$SIGN_UPDATE" -p --ed-key-file "$PRIVATE_KEY_FILE" "$ZIP" || true)
   else
@@ -101,6 +107,17 @@ fi
 SIGNATURE_ATTR=""
 if [[ -n "$ED_SIGNATURE" ]]; then
   SIGNATURE_ATTR=" sparkle:edSignature=\"${ED_SIGNATURE}\""
+elif [[ -n "$PRIVATE_KEY_INLINE" || -n "$PRIVATE_KEY_FILE" ]]; then
+  # A key was supplied and signing still failed. Shipping this appcast would
+  # publish an enclosure that every client with SUPublicEDKey rejects, and the
+  # release would look successful while in-app updates were dead.
+  echo "error: a signing key was supplied but no EdDSA signature was produced" >&2
+  if [[ -z "$SIGN_UPDATE" ]]; then
+    echo "       sign_update was not found; run swift build first" >&2
+  else
+    echo "       $SIGN_UPDATE rejected the key or the zip" >&2
+  fi
+  exit 1
 else
   echo "warning: no EdDSA signature produced; appcast enclosure lacks sparkle:edSignature" >&2
 fi
