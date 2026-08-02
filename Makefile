@@ -21,10 +21,17 @@ app: build
 	cp $(BUILD_DIR)/Rocky $(APP)/Contents/MacOS/Rocky
 	cp $(BUILD_DIR)/rocky-hook $(APP)/Contents/MacOS/rocky-hook
 	# Embed Sparkle so @rpath resolves inside the .app (preserve symlinks).
-	if [ -d "$(SPARKLE_FRAMEWORK)" ]; then \
-		ditto "$(SPARKLE_FRAMEWORK)" $(APP)/Contents/Frameworks/Sparkle.framework; \
-		install_name_tool -add_rpath @executable_path/../Frameworks $(APP)/Contents/MacOS/Rocky 2>/dev/null || true; \
-	fi
+	# RockyApp links Sparkle, so a bundle without the framework or without the
+	# rpath dies at launch with "Library not loaded: @rpath/Sparkle.framework".
+	# The release workflow packages whatever this target produces, so refuse to
+	# report success on a bundle that cannot start.
+	@test -d "$(SPARKLE_FRAMEWORK)" || \
+		{ echo "error: $(SPARKLE_FRAMEWORK) missing — run 'swift build -c $(CONFIG)' first"; exit 1; }
+	ditto "$(SPARKLE_FRAMEWORK)" $(APP)/Contents/Frameworks/Sparkle.framework
+	@otool -l $(APP)/Contents/MacOS/Rocky | grep -q '@executable_path/../Frameworks' || \
+		install_name_tool -add_rpath @executable_path/../Frameworks $(APP)/Contents/MacOS/Rocky
+	@otool -l $(APP)/Contents/MacOS/Rocky | grep -q '@executable_path/../Frameworks' || \
+		{ echo "error: could not add @executable_path/../Frameworks rpath to Rocky"; exit 1; }
 	mkdir -p $(APP)/Contents/Resources/Sounds $(APP)/Contents/Resources/Art $(APP)/Contents/Resources/Fonts
 	cp Support/Sounds/*.mp3 $(APP)/Contents/Resources/Sounds/
 	cp Support/Art/rocky/*.png $(APP)/Contents/Resources/Art/
