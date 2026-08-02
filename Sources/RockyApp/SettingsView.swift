@@ -399,12 +399,9 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text(
-                    "In-app updates need a release build with Sparkle keys "
-                        + "(see docs/releasing.md). Local make run builds skip the updater."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text("In-app updates ship with signed releases. This build skips the updater.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
 

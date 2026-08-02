@@ -130,17 +130,6 @@ make app                # build dist/Rocky.app (ad-hoc signed, embeds Sparkle)
 - `Sources/RockyApp` - the app: IPC server, session hub, notch UI,
   agent integrations, Sparkle update checks.
 
-### Releasing / notarization / Sparkle keys
-
-See **[docs/releasing.md](docs/releasing.md)** for:
-
-- GitHub Actions secrets (`APPLE_CERTIFICATE_*`, notary API key, `SPARKLE_*`)
-- Local `make release SIGN="Developer ID Application: …"`
-- Generating Ed25519 keys (`make sparkle-keys`) and appcast XML
-
-The release workflow still produces a zip **without** secrets; with secrets
-present it codesigns, notarizes, staples, and attaches a Sparkle `appcast.xml`.
-
 ## License
 
 Code is [MIT](LICENSE). The Rocky character and its assets are not, see

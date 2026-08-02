@@ -5,3 +5,12 @@ dist/
 .swiftpm/
 # Local scratch notes only — tracked docs live under docs/
 docs/local/
+
+# Signing and notarization material. Never commit any of this.
+.env
+.env.*
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+sparkle_eddsa_private.pem
