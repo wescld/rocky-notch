@@ -12,6 +12,22 @@ on:
 permissions:
   contents: write
 
+# Required repository secrets for a fully signed + notarized + Sparkle-ready
+# release (all optional — without them the job still ships an ad-hoc zip):
+#
+#   APPLE_CERTIFICATE_BASE64   Developer ID Application .p12, base64-encoded
+#   APPLE_CERTIFICATE_PASSWORD Password for that .p12
+#   APPLE_TEAM_ID              10-char Team ID
+#
+# Notary (pick one auth method):
+#   APPLE_API_KEY_ID + APPLE_API_ISSUER + APPLE_API_KEY_BASE64
+#     — App Store Connect API key (.p8 base64)  [preferred for CI]
+#   or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD
+#
+# Sparkle (optional, for in-app update signatures):
+#   SPARKLE_PRIVATE_KEY        Ed25519 private key string from generate_keys -x
+#   SPARKLE_PUBLIC_ED_KEY      Matching public key (also baked into Info.plist)
+
 jobs:
   release:
     runs-on: macos-15
@@ -22,12 +38,15 @@ jobs:
 
       - name: Compute version and build number
         id: v
+        env:
+          BUMP: ${{ inputs.bump }}
         run: |
+          set -euo pipefail
           echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
           latest=$(git tag -l 'v*' --sort=-v:refname | head -1)
           latest=${latest:-v0.1.0}
           IFS=. read -r major minor patch <<< "${latest#v}"
-          case "${{ inputs.bump }}" in
+          case "$BUMP" in
             major) major=$((major+1)); minor=0; patch=0 ;;
             minor) minor=$((minor+1)); patch=0 ;;
             *)     patch=$((patch+1)) ;;
@@ -35,39 +54,238 @@ jobs:
           echo "version=$major.$minor.$patch" >> "$GITHUB_OUTPUT"
 
       - name: Stamp version and build number
+        env:
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: |
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${{ steps.v.outputs.version }}" Support/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ steps.v.outputs.build }}" Support/Info.plist
+          set -euo pipefail
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" Support/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" Support/Info.plist
+          if [ -n "$SPARKLE_PUBLIC_ED_KEY" ]; then
+            /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_PUBLIC_ED_KEY" Support/Info.plist \
+              || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_PUBLIC_ED_KEY" Support/Info.plist
+            # The repo ships automatic checks off so local builds never start
+            # Sparkle. A build that carries the public key is a real release and
+            # is the only one allowed to look for updates on its own.
+            /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks true" Support/Info.plist \
+              || /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool true" Support/Info.plist
+          fi
+
+      - name: Detect signing secrets
+        id: signing
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APP_PW: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          can_sign=false
+          can_notary=false
+          if [ -n "$CERT" ] && [ -n "$CERT_PW" ] && [ -n "$TEAM" ]; then
+            can_sign=true
+          fi
+          if [ -n "$API_KEY" ] && [ -n "$API_KEY_ID" ] && [ -n "$API_ISSUER" ]; then
+            can_notary=true
+          elif [ -n "$APPLE_ID" ] && [ -n "$APP_PW" ] && [ -n "$TEAM" ]; then
+            can_notary=true
+          fi
+          if [ "$can_sign" = true ] && [ "$can_notary" = true ]; then
+            mode=notarized
+          elif [ "$can_sign" = true ]; then
+            mode=signed
+          else
+            mode=adhoc
+          fi
+          echo "can_sign=$can_sign" >> "$GITHUB_OUTPUT"
+          echo "can_notary=$can_notary" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "Release signing mode: $mode"
 
       - name: Tests
         run: swift test
 
       - name: Build app
-        run: make app
+        run: |
+          chmod +x scripts/codesign-app.sh scripts/generate-appcast.sh
+          make app
 
-      - name: Package
-        run: ditto -c -k --keepParent dist/Rocky.app "dist/Rocky-${{ steps.v.outputs.version }}.zip"
+      - name: Import certificate and codesign
+        if: steps.signing.outputs.can_sign == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer_id.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/rocky-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | grep "Developer ID Application" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$IDENTITY" ]; then
+            echo "error: no Developer ID Application identity found in imported keychain" >&2
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY"
+          scripts/codesign-app.sh dist/Rocky.app "$IDENTITY"
+          # Only the path is needed later, by the cleanup step. The password is
+          # not a repository secret, so GitHub would not mask it in any later
+          # step that happened to print the environment.
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Notarize and staple
+        if: steps.signing.outputs.mode == 'notarized'
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist/Rocky.app dist/Rocky-notary.zip
+
+          # API key wins when present; Apple ID is the fallback. Keeping the
+          # auth flags in one array means submit and log always agree.
+          if [ -n "$APPLE_API_KEY_BASE64" ] && [ -n "$APPLE_API_KEY_ID" ] && [ -n "$APPLE_API_ISSUER" ]; then
+            KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+            AUTH=(--key "$KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
+            echo "Notary auth: App Store Connect API key"
+          else
+            AUTH=(--apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID")
+            echo "Notary auth: Apple ID + app-specific password"
+          fi
+
+          # notarytool can exit 0 on a rejected submission, which would leave
+          # stapler to fail with an error that says nothing about the cause.
+          # Read the verdict ourselves and print Apple's log when it is not
+          # Accepted — that log names the offending binary.
+          RESULT=$(xcrun notarytool submit dist/Rocky-notary.zip "${AUTH[@]}" --wait --output-format json)
+          echo "$RESULT"
+          STATUS=$(printf '%s' "$RESULT" | plutil -extract status raw -o - - 2>/dev/null || echo unknown)
+          SUBMISSION_ID=$(printf '%s' "$RESULT" | plutil -extract id raw -o - - 2>/dev/null || echo "")
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "::error::Notarization failed with status: $STATUS"
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" "${AUTH[@]}" || true
+            fi
+            exit 1
+          fi
+
+          xcrun stapler staple dist/Rocky.app
+          # Prove the ticket is embedded before it ships; a stapled app must
+          # validate with no network, which is how users will launch it.
+          xcrun stapler validate dist/Rocky.app
+          spctl -a -vvv -t exec dist/Rocky.app
+          rm -f dist/Rocky-notary.zip
+          if [ -n "${KEY_PATH:-}" ]; then rm -f "$KEY_PATH"; fi
+
+      - name: Package zip
+        id: pkg
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          ZIP="dist/Rocky-${VER}.zip"
+          ditto -c -k --keepParent dist/Rocky.app "$ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      # SUFeedURL points at releases/latest, so whatever appcast this job
+      # uploads becomes the feed every installed copy polls. An unsigned one
+      # from an adhoc run would be rejected by clients that carry the public
+      # key, and those users would stop receiving updates until the next
+      # signed release. Only a notarized run is allowed to touch the feed.
+      - name: Generate appcast
+        if: steps.signing.outputs.mode == 'notarized'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          REPO: ${{ github.repository }}
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${REPO}/releases/download/v${VER}/Rocky-${VER}.zip"
+          scripts/generate-appcast.sh \
+            --version "$VER" \
+            --build "$BUILD" \
+            --url "$URL" \
+            --zip "$ZIP" \
+            --out dist/appcast.xml
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ steps.signing.outputs.mode }}
+          VER: ${{ steps.v.outputs.version }}
+          BUILD: ${{ steps.v.outputs.build }}
         run: |
-          cat > notes.md <<'EOF'
-          ## Install
+          set -euo pipefail
+          {
+            echo "## Install"
+            echo ""
+            echo "Download the zip, unzip and move \`Rocky.app\` to Applications."
+            echo ""
+            case "$MODE" in
+              notarized)
+                echo "This build is **Developer ID signed and notarized**."
+                ;;
+              signed)
+                echo "This build is Developer ID signed but **not notarized** (notary secrets missing)."
+                echo "On first launch you may need System Settings → Privacy & Security → **Open Anyway**."
+                ;;
+              *)
+                echo "This build is **not notarized** (signing secrets not configured)."
+                echo "On first launch, macOS will warn about an unverified developer: go to"
+                echo "System Settings → Privacy & Security → **Open Anyway**, or run"
+                echo "\`xattr -d com.apple.quarantine /Applications/Rocky.app\`."
+                ;;
+            esac
+            echo ""
+            echo "You can always build from source instead: \`git clone\` + \`make run\`."
+            echo ""
+            echo "Build ${BUILD} · signing mode: \`${MODE}\`."
+          } > notes.md
 
-          Download the zip, unzip and move `Rocky.app` to Applications.
-
-          This build is not notarized yet. On first launch, macOS will warn
-          about an unverified developer: go to System Settings → Privacy &
-          Security → **Open Anyway**, or run
-          `xattr -d com.apple.quarantine /Applications/Rocky.app`.
-
-          You can always build from source instead: `git clone` + `make run`.
-          EOF
-          echo "" >> notes.md
-          echo "Build ${{ steps.v.outputs.build }}." >> notes.md
-          gh release create "v${{ steps.v.outputs.version }}" \
-            "dist/Rocky-${{ steps.v.outputs.version }}.zip" \
-            --title "Rocky ${{ steps.v.outputs.version }}" \
+          # Only a notarized run produces an appcast. Anything else must also
+          # stay out of "latest": SUFeedURL resolves through releases/latest, so
+          # a release without an appcast would answer 404 to every installed
+          # copy. GitHub skips prereleases when it picks latest, which keeps the
+          # feed pointing at the last notarized release.
+          ASSETS=("dist/Rocky-${VER}.zip")
+          FLAGS=()
+          if [ -f dist/appcast.xml ]; then
+            ASSETS+=(dist/appcast.xml)
+          else
+            FLAGS+=(--prerelease)
+            echo "No appcast for this run; publishing as a prerelease so the update feed keeps pointing at the last notarized release."
+          fi
+          gh release create "v${VER}" \
+            "${ASSETS[@]}" \
+            "${FLAGS[@]+"${FLAGS[@]}"}" \
+            --title "Rocky ${VER}" \
             --notes-file notes.md \
             --generate-notes
+
+      - name: Cleanup keychain
+        if: always() && steps.signing.outputs.can_sign == 'true'
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "${KEYCHAIN_PATH}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi

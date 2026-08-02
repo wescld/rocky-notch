@@ -390,6 +390,21 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var aboutSections: some View {
+        Section("Updates") {
+            if UpdateChecker.shared.isAvailable {
+                Button("Check for Updates…") {
+                    UpdateChecker.shared.checkForUpdates()
+                }
+                Text("Rocky uses Sparkle to download signed updates from GitHub Releases.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("In-app updates ship with signed releases. This build skips the updater.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
         Section("Details") {
             LabeledContent("Version", value: Rocky.version)
             LabeledContent("Active sessions", value: "\(hub.sessions.count)")
