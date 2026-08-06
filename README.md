@@ -26,6 +26,10 @@
 
 ---
 
+<p align="center">
+  <img src=".github/assets/screenshot.png" width="720" alt="Rocky expanded under the notch, showing live agent sessions, delegated subagents, token usage and rate-limit windows" />
+</p>
+
 Rocky is a native macOS app that sits in your MacBook notch (or menu bar) and
 monitors every AI coding agent session on your machine. When an agent asks
 for permission, Rocky chimes, shows you the command or the diff, and lets you
