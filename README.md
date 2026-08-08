@@ -14,7 +14,7 @@
   <a href="https://github.com/wescld/rocky-notch/releases/latest"><img src="https://img.shields.io/github/v/release/wescld/rocky-notch?color=3DE383" alt="Latest release" /></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+" />
   <img src="https://img.shields.io/badge/Swift-5.10-F05138" alt="Swift" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT" /></a>
 </p>
 
 <p align="center">
@@ -25,6 +25,10 @@
 </p>
 
 ---
+
+<p align="center">
+  <img src=".github/assets/screenshot.png" width="720" alt="Rocky expanded under the notch, showing live agent sessions, delegated subagents, token usage and rate-limit windows" />
+</p>
 
 Rocky is a native macOS app that sits in your MacBook notch (or menu bar) and
 monitors every AI coding agent session on your machine. When an agent asks
