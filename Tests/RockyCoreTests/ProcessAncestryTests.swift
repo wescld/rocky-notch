@@ -7,6 +7,7 @@ final class ProcessAncestryTests: XCTestCase {
         XCTAssertEqual(ProcessAncestry.agentNameMarkers(for: "claude-code"), ["claude"])
         XCTAssertEqual(ProcessAncestry.agentNameMarkers(for: "grok"), ["grok"])
         XCTAssertTrue(ProcessAncestry.agentNameMarkers(for: "cursor").isEmpty)
+        XCTAssertEqual(ProcessAncestry.agentNameMarkers(for: "agy"), ["agy"])
     }
 
     func testIsProcessAliveSelf() {

@@ -22,6 +22,8 @@ struct AgentIntegration {
         case nestedGroups
         /// Cursor: flat `[{ "command" }]` plus top-level `version`.
         case cursorFlat
+        /// Agy: top-level named hook (`rocky-notch`) with mixed grouped/flat events.
+        case agyNamed
     }
 
     let displayName: String
@@ -167,6 +169,30 @@ struct AgentIntegration {
         )
     }
 
+    static var agy: AgentIntegration {
+        // Official 1.1.x path is the shared Gemini config, not
+        // ~/.gemini/antigravity-cli/hooks.json (that was a /hooks bug).
+        let config = home.appendingPathComponent(".gemini/config/hooks.json")
+        let presence = home.appendingPathComponent(".gemini/antigravity-cli")
+        return AgentIntegration(
+            displayName: "Agy",
+            configURL: config,
+            presenceDirectory: presence,
+            events: AgySettingsMerger.agyEvents.map { ($0.name, $0.needsReply) },
+            commandArguments: AgySettingsMerger.commandArguments,
+            configStyle: .agyNamed,
+            installNote: """
+
+            Agy (Antigravity CLI) uses PreToolUse for blocking hooks — there \
+            is no PermissionRequest. Rocky auto-passes read-only tools, and \
+            auto-passes everything when Agy is in always-proceed or \
+            --dangerously-skip-permissions. Sessions are also discovered from \
+            ~/.gemini/antigravity-cli/brain transcripts. Restart an open Agy \
+            session (or start a new one) after installing.
+            """
+        )
+    }
+
     static var openCode: AgentIntegration {
         let configHome = OpenCodePluginBackend.defaultConfigHome()
         let commandArguments = "--agent opencode"
@@ -211,6 +237,18 @@ struct AgentIntegration {
             if FileManager.default.fileExists(atPath: bin.path) { return true }
             return false
         }
+        if configStyle == .agyNamed {
+            if FileManager.default.fileExists(atPath: presenceDirectory.path) {
+                return true
+            }
+            let binaries = [
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".local/bin/agy"),
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".gemini/antigravity-cli/bin/agy"),
+            ]
+            return binaries.contains { FileManager.default.isExecutableFile(atPath: $0.path) }
+        }
         return FileManager.default.fileExists(atPath: presenceDirectory.path)
     }
 
@@ -234,6 +272,8 @@ struct AgentIntegration {
             return ClaudeSettingsMerger.isInstalled(settings: data)
         case .cursorFlat:
             return CursorSettingsMerger.isInstalled(settings: data)
+        case .agyNamed:
+            return AgySettingsMerger.isInstalled(settings: data)
         }
     }
 
@@ -261,6 +301,12 @@ struct AgentIntegration {
                 settings: data,
                 hookBinaryPath: Self.hookBinaryPath,
                 events: events,
+                commandArguments: commandArguments
+            )
+        case .agyNamed:
+            return !AgySettingsMerger.isCurrent(
+                settings: data,
+                hookBinaryPath: Self.hookBinaryPath,
                 commandArguments: commandArguments
             )
         }
@@ -293,6 +339,12 @@ struct AgentIntegration {
                     events: events,
                     commandArguments: commandArguments
                 )
+            case .agyNamed:
+                merged = try AgySettingsMerger.merge(
+                    settings: existing,
+                    hookBinaryPath: Self.hookBinaryPath,
+                    commandArguments: commandArguments
+                )
             }
         } catch {
             throw IntegrationError.unparseableSettings(configURL.path)
@@ -317,6 +369,8 @@ struct AgentIntegration {
                 cleaned = try ClaudeSettingsMerger.unmerge(settings: existing)
             case .cursorFlat:
                 cleaned = try CursorSettingsMerger.unmerge(settings: existing)
+            case .agyNamed:
+                cleaned = try AgySettingsMerger.unmerge(settings: existing)
             }
         } catch {
             throw IntegrationError.unparseableSettings(configURL.path)

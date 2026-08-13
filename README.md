@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Your AI coding agents, living in the notch.</b><br />
-  Watch every Claude Code, Codex, Grok, Cursor, Kimi, and OpenCode session and approve permissions without leaving your flow.
+  Watch every Claude Code, Codex, Grok, Cursor, Kimi, OpenCode, and Agy session and approve permissions without leaving your flow.
 </p>
 
 <p align="center">
@@ -46,6 +46,7 @@ Claude Code ── PermissionRequest hook ──▶ rocky-hook ── unix socke
 Grok        ── PreToolUse hook         ──▶ rocky-hook ── unix socket ──▶ Rocky
 Kimi        ── PreToolUse hook (plugin)──▶ rocky-hook ── unix socket ──▶ Rocky
 OpenCode    ── JS plugin (permission.ask) ──▶ rocky-hook ── unix socket ──▶ Rocky
+Agy         ── PreToolUse hook         ──▶ rocky-hook ── unix socket ──▶ Rocky
      ◀── allow / deny ◀───────────────────────────────────◀── you click
 ```
 
@@ -62,7 +63,7 @@ prompt appears. Rocky can never block your work.
 - Token usage and working time per session
 - Rocky speaks in soft musical chimes when something needs you
 - Menu bar mode for notchless displays
-- Claude Code, Codex, Grok, Cursor, Kimi Code, and OpenCode supported today; more agents welcome via PRs
+- Claude Code, Codex, Grok, Cursor, Kimi Code, OpenCode, and Agy (Antigravity CLI) supported today; more agents welcome via PRs
 - 100% local. No server, no telemetry, no account.
 
 ## Install
@@ -99,6 +100,7 @@ conservatively, never touching your other settings):
 | Cursor | `~/.cursor/hooks.json` |
 | Kimi Code | `~/.kimi-code/plugins/` (dedicated plugin) |
 | OpenCode | `~/.config/opencode/plugins/rocky-notch.js` (JS bridge plugin) |
+| Agy (Antigravity CLI) | `~/.gemini/config/hooks.json` (named hook `rocky-notch`) |
 
 Removing the integration removes only Rocky's entries. Grok uses
 `PreToolUse` for blocking (no `PermissionRequest`). Cursor uses its
@@ -118,6 +120,17 @@ folder) — run `/plugins reload` in an open Kimi session, or start a new
 one, after installing. Kimi uses `PreToolUse` and is deny-only, and its
 mode isn't exposed to hooks, so Rocky observes Kimi by default and gates
 tool calls only when you enable it for `auto` / `yolo` sessions.
+
+Agy (Antigravity CLI) uses named hooks in `~/.gemini/config/hooks.json`
+(not the older `~/.gemini/antigravity-cli/hooks.json` path). Rocky
+installs a `rocky-notch` group: `PreToolUse` is the approval channel
+(Agy has no `PermissionRequest`); `PostToolUse`, `PreInvocation`,
+`PostInvocation`, and `Stop` keep the session card accurate. Read-only
+tools are auto-passed, and the gate is skipped when Agy is in
+`always-proceed` or `--dangerously-skip-permissions`. Decisions return
+`{"decision":"allow|deny"}`. Sessions are also discovered from
+`~/.gemini/antigravity-cli/brain/*/…/transcript.jsonl`. Restart an open
+Agy session after installing.
 
 ## Development
 

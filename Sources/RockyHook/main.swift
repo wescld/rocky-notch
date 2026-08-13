@@ -39,7 +39,12 @@ let agent = AgentIdentity.resolve(
     environment: ProcessInfo.processInfo.environment
 )
 
-let input = FileHandle.standardInput.readDataToEndOfFile()
+var input = FileHandle.standardInput.readDataToEndOfFile()
+// Agy (and any future CLI that omits hookEventName) gets `--event` from
+// the install command so PreToolUse vs PostToolUse stay distinct.
+if let eventName = AgentIdentity.flagValue("--event", in: CommandLine.arguments) {
+    input = HookEvent.applyingEventName(eventName, to: input)
+}
 guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {
     failOpen("decode: \(String(data: input.prefix(300), encoding: .utf8) ?? "binary")")
 }
@@ -85,6 +90,20 @@ if agent == "cursor",
       exit(0)
   }
 
+  // Agy PreToolUse fires for every tool, including read-only ones and
+  // always-proceed / --dangerously-skip-permissions sessions.
+  if agent == "agy",
+     event.kind == .permissionRequest,
+     AgyToolPolicy.shouldSkipRockyGate(
+         toolName: event.toolName,
+         permissionMode: event.permissionMode
+     ) {
+      debugLog(
+          "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? "config")"
+      )
+      exit(0)
+  }
+
   // Resolve the agent CLI PID **now**, while this process is still a child of
   // the agent tree. The app used to walk ancestry after we exit; by then the
   // hook PID is often reaped and agentProcessPid stayed nil → sticky cards.
@@ -125,6 +144,14 @@ if agent == "cursor",
   if agent == "kimi-code", event.kind == .stop, event.lastAssistantMessage == nil,
      let closing = KimiTranscript.lastAssistantMessage(sessionId: event.sessionId) {
       debugLog("kimi closing recovered (\(closing.count) chars)")
+      outgoingEvent = event.withLastAssistantMessage(closing)
+  }
+  if agent == "agy", event.kind == .stop, event.lastAssistantMessage == nil,
+     let closing = AgyTranscript.lastAssistantMessage(
+         sessionId: event.sessionId,
+         transcriptPath: event.transcriptPath
+     ) {
+      debugLog("agy closing recovered (\(closing.count) chars)")
       outgoingEvent = event.withLastAssistantMessage(closing)
   }
 

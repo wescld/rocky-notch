@@ -39,6 +39,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "PostToolUse": self = .postToolUse
             case "UserPromptSubmit", "BeforeSubmitPrompt":
                 self = .userPromptSubmit
+            // Agy has no SessionStart; PreInvocation is the first signal a
+            // turn is alive and carries modelName / workspacePaths.
+            case "PreInvocation":
+                self = .sessionStart
             default: self = .unknown(name)
             }
         }
@@ -64,6 +68,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "beforemcpexecution": return "BeforeMCPExecution"
             case "beforereadfile": return "BeforeReadFile"
             case "afterfileedit": return "AfterFileEdit"
+            case "preinvocation": return "PreInvocation"
+            case "postinvocation": return "PostInvocation"
             default: return name
             }
         }
@@ -114,6 +120,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case workspace_root
         case workspaceRoots = "workspace_roots"
         case workspaceRootsCamel = "workspaceRoots"
+        case workspacePaths
         case transcriptPath = "transcript_path"
         case transcriptPathCamel = "transcriptPath"
         case permissionMode = "permission_mode"
@@ -122,6 +129,12 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case toolNameCamel = "toolName"
         case toolInput = "tool_input"
         case toolInputCamel = "toolInput"
+        /// Agy nests the call: `{ "toolCall": { "name", "args" } }`.
+        case toolCall
+        case modelName
+        case terminationReason
+        case fullyIdle
+        case invocationNum
         /// Cursor beforeShellExecution puts the shell line at the top level.
         case command
         case message
@@ -148,14 +161,17 @@ public struct HookEvent: Codable, Equatable, Sendable {
         sessionId = try Self.decodeRequiredString(
             c, .sessionId, .sessionIdCamel, .conversationId, .conversationIdCamel
         )
-        let rawEventName = try Self.decodeRequiredString(c, .hookEventName, .hookEventNameCamel)
+        let rawEventName = (try Self.decodeOptionalString(c, .hookEventName, .hookEventNameCamel))
+            ?? Self.inferEventName(from: c)
+            ?? "Unknown"
         hookEventName = Kind.canonical(rawEventName)
         var resolvedCwd = try Self.decodeOptionalString(c, .cwd)
             ?? Self.decodeOptionalString(c, .workspaceRoot)
             ?? Self.decodeOptionalString(c, .workspace_root)
         if resolvedCwd == nil {
             if let roots = try c.decodeIfPresent([String].self, forKey: .workspaceRoots)
-                ?? c.decodeIfPresent([String].self, forKey: .workspaceRootsCamel),
+                ?? c.decodeIfPresent([String].self, forKey: .workspaceRootsCamel)
+                ?? c.decodeIfPresent([String].self, forKey: .workspacePaths),
                let first = roots.first, !first.isEmpty {
                 resolvedCwd = first
             }
@@ -166,6 +182,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
         var resolvedToolName = try Self.decodeOptionalString(c, .toolName, .toolNameCamel)
         var resolvedToolInput = try c.decodeIfPresent(JSONValue.self, forKey: .toolInput)
             ?? c.decodeIfPresent(JSONValue.self, forKey: .toolInputCamel)
+        if let call = try? c.decode(AgyToolCall.self, forKey: .toolCall) {
+            if resolvedToolName == nil { resolvedToolName = call.name }
+            if resolvedToolInput == nil { resolvedToolInput = call.args }
+        }
         // Cursor beforeShellExecution: { "command": "npm test", … } without tool_name.
         if let shellCommand = try Self.decodeOptionalString(c, .command), !shellCommand.isEmpty {
             if resolvedToolName == nil {
@@ -193,6 +213,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         )
         source = try c.decodeIfPresent(String.self, forKey: .source)
         model = try c.decodeIfPresent(String.self, forKey: .model)
+            ?? (try Self.decodeOptionalString(c, .modelName))
         sessionTitle = try Self.decodeOptionalString(c, .sessionTitle, .sessionTitleCamel)
         lastAssistantMessage = try Self.decodeOptionalString(
             c, .lastAssistantMessage, .lastAssistantMessageCamel
@@ -293,18 +314,30 @@ public struct HookEvent: Codable, Equatable, Sendable {
     public var toolSummary: String? {
         guard let toolName else { return nil }
         switch toolName {
-        case "Bash", "Shell", "run_terminal_command", "PowerShell":
-            return toolInput?["command"]?.stringValue ?? "shell command"
+        case "Bash", "Shell", "run_terminal_command", "PowerShell", "run_command":
+            return toolInput?["command"]?.stringValue
+                ?? toolInput?["CommandLine"]?.stringValue
+                ?? "shell command"
         case "Edit", "Write", "Read", "NotebookEdit", "Delete",
-             "search_replace", "write", "read_file", "MultiEdit":
+             "search_replace", "write", "read_file", "MultiEdit",
+             "write_to_file", "replace_file_content", "multi_replace_file_content",
+             "view_file":
             return toolInput?["file_path"]?.stringValue
                 ?? toolInput?["target_file"]?.stringValue
+                ?? toolInput?["TargetFile"]?.stringValue
+                ?? toolInput?["AbsolutePath"]?.stringValue
                 ?? toolInput?["path"]?.stringValue
                 ?? toolName
-        case "WebFetch", "web_fetch", "open_page", "web_fetch_url":
-            return toolInput?["url"]?.stringValue ?? toolName
-        case "WebSearch", "web_search", "SemanticSearch":
-            return toolInput?["query"]?.stringValue ?? toolName
+        case "WebFetch", "web_fetch", "open_page", "web_fetch_url", "read_url_content":
+            return toolInput?["url"]?.stringValue
+                ?? toolInput?["Url"]?.stringValue
+                ?? toolName
+        case "WebSearch", "web_search", "SemanticSearch", "search_web", "grep_search":
+            return toolInput?["query"]?.stringValue
+                ?? toolInput?["Query"]?.stringValue
+                ?? toolName
+        case "invoke_subagent":
+            return toolName
         // Claude Code renamed Task to Agent; both spellings are in the wild.
         case "Task", "Agent":
             return toolInput?["description"]?.stringValue
@@ -353,6 +386,39 @@ public struct HookEvent: Codable, Equatable, Sendable {
             }
         }
         return nil
+    }
+
+    /// Agy nests the proposed call instead of using Claude's flat keys.
+    private struct AgyToolCall: Decodable {
+        let name: String?
+        let args: JSONValue?
+    }
+
+    /// Agy's official hook stdin has no `hookEventName`. Infer from the
+    /// fields that only one event carries so a missing `--event` still
+    /// decodes instead of fail-opening the whole payload.
+    static func inferEventName(from c: KeyedDecodingContainer<CodingKeys>) -> String? {
+        if (try? c.decodeIfPresent(String.self, forKey: .terminationReason)) != nil
+            || (try? c.decodeIfPresent(Bool.self, forKey: .fullyIdle)) != nil {
+            return "Stop"
+        }
+        if (try? c.decodeIfPresent(AgyToolCall.self, forKey: .toolCall)) != nil {
+            return "PreToolUse"
+        }
+        if (try? c.decodeIfPresent(Int.self, forKey: .invocationNum)) != nil {
+            return "PreInvocation"
+        }
+        return nil
+    }
+
+    /// Overlay `--event` from our install command onto a raw stdin blob.
+    /// Agy never sends `hookEventName`; the flag is how we tell PreToolUse
+    /// from PostToolUse when both can carry `toolCall`.
+    public static func applyingEventName(_ name: String, to data: Data) -> Data {
+        guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return data }
+        object["hookEventName"] = name
+        return (try? JSONSerialization.data(withJSONObject: object)) ?? data
     }
 
     /// A prompt part in Kimi's structured `UserPromptSubmit` payload.

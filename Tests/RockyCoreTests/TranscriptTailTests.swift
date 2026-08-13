@@ -72,4 +72,21 @@ final class TranscriptTailTests: XCTestCase {
         XCTAssertEqual(update.tokens, 195)
         XCTAssertEqual(update.lastAction, "running ls")
     }
+
+    func testAgyPlannerResponseToolCall() {
+        let data = chunk(
+            #"{"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"name":"run_command","args":{"CommandLine":"\"npm test\"","Cwd":"\"/tmp\""}}]}"#
+        )
+        XCTAssertEqual(TranscriptTail.lastAction(in: data), "running npm test")
+    }
+
+    func testAgyWriteToFileFriendlyName() {
+        XCTAssertEqual(
+            TranscriptTail.friendly(
+                tool: "write_to_file",
+                input: ["TargetFile": "/tmp/hello.txt"]
+            ),
+            "writing hello.txt"
+        )
+    }
 }

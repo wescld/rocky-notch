@@ -3,7 +3,7 @@ import Foundation
 /// On-disk session discovery from agent-written JSONL transcripts.
 ///
 /// Complements `SessionPersistence` (Rocky's own snapshot + PID liveness):
-/// this finds Claude / Codex sessions even when Rocky was never running.
+/// this finds Claude / Codex / Agy sessions even when Rocky was never running.
 /// Discovered rows are always observational — status `.idle`, no pending
 /// permission, no host/agent PIDs. Live hooks still win via
 /// `SessionStore.restore` (fills missing ids only) + `apply`.
@@ -26,7 +26,11 @@ public enum SessionDiscovery {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
-    /// Scan Claude + Codex transcript roots and return idle observational rows.
+    public static func agyBrainRoot(home: String = NSHomeDirectory()) -> URL {
+        AgyTranscript.brainRoot(home: home)
+    }
+
+    /// Scan Claude + Codex + Agy transcript roots and return idle observational rows.
     public static func discoverRecent(
         home: String = NSHomeDirectory(),
         now: Date = Date(),
@@ -51,7 +55,15 @@ public enum SessionDiscovery {
             maxFiles: maxFiles,
             maxBytesPerFile: maxBytesPerFile
         )
-        return (claude + codex).sorted { $0.lastEventAt > $1.lastEventAt }
+        let agy = discoverAgy(
+            rootURL: agyBrainRoot(home: home),
+            now: now,
+            fileManager: fileManager,
+            maxAge: maxAge,
+            maxFiles: maxFiles,
+            maxBytesPerFile: maxBytesPerFile
+        )
+        return (claude + codex + agy).sorted { $0.lastEventAt > $1.lastEventAt }
     }
 
     /// Drops discovered rows whose agent has no live process anywhere near the
@@ -193,6 +205,56 @@ public enum SessionDiscovery {
             byID[session.id] = session
         }
         return byID.values.sorted { $0.lastEventAt > $1.lastEventAt }
+    }
+
+    // MARK: - Agy
+
+    /// Walk `brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
+    /// The enumerator would skip `.system_generated` (hidden), so we resolve
+    /// each conversation folder ourselves.
+    public static func discoverAgy(
+        rootURL: URL,
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        maxAge: TimeInterval = maxAge,
+        maxFiles: Int = maxFiles,
+        maxBytesPerFile: Int = maxBytesPerFile
+    ) -> [AgentSession] {
+        guard fileManager.fileExists(atPath: rootURL.path),
+              let conversations = try? fileManager.contentsOfDirectory(
+                at: rootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              )
+        else { return [] }
+
+        let cutoff = now.addingTimeInterval(-maxAge)
+        var candidates: [(url: URL, modifiedAt: Date, id: String)] = []
+        for folder in conversations {
+            let values = try? folder.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory == true else { continue }
+            let transcript = folder
+                .appendingPathComponent(".system_generated/logs/transcript.jsonl")
+            guard fileManager.fileExists(atPath: transcript.path) else { continue }
+            let attrs = try? fileManager.attributesOfItem(atPath: transcript.path)
+            let modifiedAt = attrs?[.modificationDate] as? Date ?? .distantPast
+            guard modifiedAt >= cutoff else { continue }
+            candidates.append((transcript, modifiedAt, folder.lastPathComponent))
+        }
+
+        return Array(
+            candidates
+                .sorted { $0.modifiedAt > $1.modifiedAt }
+                .prefix(maxFiles)
+        )
+        .compactMap { candidate in
+            parseAgySession(
+                at: candidate.url,
+                sessionID: candidate.id,
+                fallbackUpdatedAt: candidate.modifiedAt,
+                maxBytes: maxBytesPerFile
+            )
+        }
     }
 
     // MARK: - Conversion
@@ -402,6 +464,65 @@ public enum SessionDiscovery {
             task: task,
             lastAction: lastAction
         )
+    }
+
+    private static func parseAgySession(
+        at fileURL: URL,
+        sessionID: String,
+        fallbackUpdatedAt: Date,
+        maxBytes: Int
+    ) -> AgentSession? {
+        var cwd: String?
+        var updatedAt = fallbackUpdatedAt
+        var task: String?
+        var lastAction: String?
+
+        forEachJSONLLine(at: fileURL, maxBytes: maxBytes) { object in
+            if let ts = parseTimestamp(object["created_at"]) {
+                updatedAt = ts
+            }
+            let type = object["type"] as? String
+            if type == "USER_INPUT",
+               let content = object["content"] as? String,
+               let request = AgyTranscript.userRequest(from: content),
+               task == nil {
+                task = SessionStore.displayTask(from: request)
+            }
+            if type == "PLANNER_RESPONSE",
+               let calls = object["tool_calls"] as? [[String: Any]],
+               let last = calls.last,
+               let name = last["name"] as? String {
+                let args = AgyTranscript.unquoteArgs(last["args"] as? [String: Any])
+                lastAction = TranscriptTail.friendly(tool: name, input: args)
+                if cwd == nil, let found = cwdFromAgyArgs(args) {
+                    cwd = found
+                }
+            }
+        }
+
+        guard let cwd, !cwd.isEmpty, !sessionID.isEmpty else { return nil }
+        return makeObservationalSession(
+            id: sessionID,
+            agent: "agy",
+            cwd: cwd,
+            lastEventAt: updatedAt,
+            transcriptPath: fileURL.path,
+            task: task,
+            lastAction: lastAction
+        )
+    }
+
+    private static func cwdFromAgyArgs(_ args: [String: Any]?) -> String? {
+        guard let args else { return nil }
+        if let value = args["Cwd"] as? String ?? args["cwd"] as? String,
+           !value.isEmpty {
+            return value
+        }
+        if let file = args["TargetFile"] as? String ?? args["AbsolutePath"] as? String,
+           !file.isEmpty {
+            return (file as NSString).deletingLastPathComponent
+        }
+        return nil
     }
 
     /// Stream JSONL lines up to `maxBytes` without loading the whole file.

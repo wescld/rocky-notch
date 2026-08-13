@@ -16,18 +16,20 @@ public struct EditDiff: Equatable, Sendable {
     /// Write's content). Nil for tools without file mutations.
     public static func from(toolName: String, input: JSONValue?) -> EditDiff? {
         switch toolName {
-        case "Edit", "search_replace":
-            // MultiEdit is intentionally excluded: its changes live in an
-            // `edits` array, not top-level old_string/new_string, so it has no
-            // single-hunk diff to render here.
-            guard let old = input?["old_string"]?.stringValue,
+        case "Edit", "search_replace", "replace_file_content":
+            // MultiEdit / multi_replace_file_content are intentionally
+            // excluded: their changes live in an array, not a single hunk.
+            guard let old = input?["old_string"]?.stringValue
+                ?? input?["TargetContent"]?.stringValue,
                   let new = input?["new_string"]?.stringValue
+                ?? input?["ReplacementContent"]?.stringValue
             else { return nil }
             return diff(old: old, new: new)
-        case "Write", "write", "NotebookEdit":
+        case "Write", "write", "NotebookEdit", "write_to_file":
             guard let content = input?["content"]?.stringValue
                 ?? input?["new_source"]?.stringValue
                 ?? input?["new_string"]?.stringValue
+                ?? input?["CodeContent"]?.stringValue
             else { return nil }
             let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
             return EditDiff(

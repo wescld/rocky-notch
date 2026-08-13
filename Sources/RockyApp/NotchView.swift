@@ -725,6 +725,7 @@ struct AgentLogo: View {
         case "cursor": return "cursor"
         case "kimi-code": return "kimi"
         case "opencode": return "opencode"
+        case "agy": return "agy"
         default: return nil
         }
     }

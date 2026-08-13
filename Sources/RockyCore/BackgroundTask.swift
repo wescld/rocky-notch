@@ -198,6 +198,7 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
     /// "claude" last because half the paths on this machine contain it.
     static let providerMarkers: [(String, String)] = [
         ("opencode", "OpenCode"),
+        ("agy", "Agy"),
         ("codex", "Codex"),
         ("grok", "Grok"),
         ("kimi", "Kimi"),

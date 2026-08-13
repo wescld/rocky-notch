@@ -191,4 +191,72 @@ final class HookEventTests: XCTestCase {
         """)
         XCTAssertEqual(event.prompt, "look at this screenshot")
     }
+
+    func testDecodesAgyPreToolUseWithoutEventName() throws {
+        let event = try decode("""
+        {
+          "conversationId": "ec33ebf9-0cba-4100-8142-c61503f6c587",
+          "workspacePaths": ["/Users/w/proj"],
+          "transcriptPath": "/Users/w/.gemini/antigravity-cli/brain/ec33/transcript.jsonl",
+          "modelName": "gemini-3.6-flash-medium",
+          "toolCall": {
+            "name": "run_command",
+            "args": { "CommandLine": "npm test", "Cwd": "/Users/w/proj" }
+          },
+          "stepIdx": 19
+        }
+        """)
+        XCTAssertEqual(event.kind, .permissionRequest)
+        XCTAssertEqual(event.hookEventName, "PreToolUse")
+        XCTAssertEqual(event.sessionId, "ec33ebf9-0cba-4100-8142-c61503f6c587")
+        XCTAssertEqual(event.cwd, "/Users/w/proj")
+        XCTAssertEqual(event.toolName, "run_command")
+        XCTAssertEqual(event.toolSummary, "npm test")
+        XCTAssertEqual(event.model, "gemini-3.6-flash-medium")
+        XCTAssertEqual(
+            event.transcriptPath,
+            "/Users/w/.gemini/antigravity-cli/brain/ec33/transcript.jsonl"
+        )
+    }
+
+    func testApplyingEventNameDistinguishesPostToolUse() throws {
+        let raw = Data("""
+        {
+          "conversationId": "s",
+          "workspacePaths": ["/tmp"],
+          "toolCall": { "name": "run_command", "args": { "CommandLine": "ls" } }
+        }
+        """.utf8)
+        let stamped = HookEvent.applyingEventName("PostToolUse", to: raw)
+        let event = try JSONDecoder().decode(HookEvent.self, from: stamped)
+        XCTAssertEqual(event.kind, .postToolUse)
+        XCTAssertEqual(event.hookEventName, "PostToolUse")
+        XCTAssertEqual(event.toolName, "run_command")
+    }
+
+    func testDecodesAgyStopFromFullyIdle() throws {
+        let event = try decode("""
+        {
+          "conversationId": "s",
+          "workspacePaths": ["/tmp/proj"],
+          "terminationReason": "model_stop",
+          "fullyIdle": true
+        }
+        """)
+        XCTAssertEqual(event.kind, .stop)
+        XCTAssertEqual(event.cwd, "/tmp/proj")
+    }
+
+    func testDecodesAgyPreInvocationAsSessionStart() throws {
+        let event = try decode("""
+        {
+          "conversationId": "s",
+          "workspacePaths": ["/tmp/proj"],
+          "modelName": "gemini-3.6-flash-high",
+          "invocationNum": 0
+        }
+        """)
+        XCTAssertEqual(event.kind, .sessionStart)
+        XCTAssertEqual(event.model, "gemini-3.6-flash-high")
+    }
 }

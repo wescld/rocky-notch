@@ -21,6 +21,8 @@ public enum ProcessAncestry {
             // Binary is `opencode`; Bun may appear in the tree when spawning
             // the bridge plugin's child rocky-hook process.
             return ["opencode"]
+        case "agy":
+            return ["agy"]
         default:
             return [agent.lowercased()]
         }
