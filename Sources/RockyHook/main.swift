@@ -91,17 +91,23 @@ if agent == "cursor",
   }
 
   // Agy PreToolUse fires for every tool, including read-only ones and
-  // always-proceed / --dangerously-skip-permissions sessions.
-  if agent == "agy",
-     event.kind == .permissionRequest,
-     AgyToolPolicy.shouldSkipRockyGate(
-         toolName: event.toolName,
-         permissionMode: event.permissionMode
-     ) {
-      debugLog(
-          "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? "config")"
-      )
-      exit(0)
+  // always-proceed / --dangerously-skip-permissions sessions. The launch
+  // flag is not persisted and the payload has no permissionMode, so walk
+  // the parent `agy` argv while this hook is still a child of it.
+  if agent == "agy", event.kind == .permissionRequest {
+      let hookPid = ProcessInfo.processInfo.processIdentifier
+      let launchMode = ProcessAncestry.agentAncestor(of: hookPid, agent: agent)
+          .flatMap { ProcessAncestry.commandLine(of: $0) }
+          .flatMap { AgyToolPolicy.permissionMode(fromArguments: $0) }
+      if AgyToolPolicy.shouldSkipRockyGate(
+          toolName: event.toolName,
+          permissionMode: event.permissionMode ?? launchMode
+      ) {
+          debugLog(
+              "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? launchMode ?? "config")"
+          )
+          exit(0)
+      }
   }
 
   // Resolve the agent CLI PID **now**, while this process is still a child of

@@ -10,6 +10,13 @@ final class ProcessAncestryTests: XCTestCase {
         XCTAssertEqual(ProcessAncestry.agentNameMarkers(for: "agy"), ["agy"])
     }
 
+    func testCommandLineOfSelfIsReadable() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let argv = ProcessAncestry.commandLine(of: pid)
+        XCTAssertNotNil(argv)
+        XCTAssertFalse(argv?.isEmpty ?? true)
+    }
+
     func testIsProcessAliveSelf() {
         let selfPid = ProcessInfo.processInfo.processIdentifier
         XCTAssertTrue(ProcessAncestry.isProcessAlive(selfPid))

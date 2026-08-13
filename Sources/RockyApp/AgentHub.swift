@@ -348,9 +348,9 @@ final class AgentHub: ObservableObject {
         }
 
         // Transcript enrichment follows the session's lifetime. Codex marks
-        // its transcript_path as unstable for hooks; only tail Claude's.
+        // its transcript_path as unstable for hooks; Claude and Agy are safe.
         let sessionId = envelope.event.sessionId
-        if envelope.agent == "claude-code",
+        if envelope.agent == "claude-code" || envelope.agent == "agy",
            let path = store.sessions[sessionId]?.transcriptPath {
             transcripts.watch(sessionId: sessionId, path: path)
         }

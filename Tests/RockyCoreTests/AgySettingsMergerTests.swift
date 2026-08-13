@@ -85,6 +85,27 @@ final class AgySettingsMergerTests: XCTestCase {
         XCTAssertFalse(AgySettingsMerger.isInstalled(settings: out))
     }
 
+    func testUnmergeDoesNotTouchForeignGroups() throws {
+        let existing = """
+        {
+          "someone-else": {
+            "PreToolUse": [
+              { "matcher": "*", "hooks": [{ "command": "\(binary) --agent agy --event PreToolUse" }] }
+            ]
+          },
+          "rocky-notch": {
+            "PreToolUse": [
+              { "matcher": "*", "hooks": [{ "command": "\(binary) --agent agy --event PreToolUse" }] }
+            ]
+          }
+        }
+        """
+        let out = try AgySettingsMerger.unmerge(settings: Data(existing.utf8))
+        let root = try parse(out)
+        XCTAssertNil(root["rocky-notch"])
+        XCTAssertNotNil(root["someone-else"])
+    }
+
     func testStaleBinaryIsNotCurrent() throws {
         let out = try AgySettingsMerger.merge(
             settings: nil, hookBinaryPath: "/old/rocky-hook"

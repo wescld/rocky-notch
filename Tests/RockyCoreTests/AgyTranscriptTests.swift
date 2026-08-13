@@ -42,6 +42,14 @@ final class AgyTranscriptTests: XCTestCase {
         XCTAssertNil(AgyTranscript.lastAssistantText(inTail: Data(tail.utf8)))
     }
 
+    func testLaterActionClearsEarlierProse() {
+        let tail = """
+        {"source":"MODEL","type":"PLANNER_RESPONSE","content":"All tests passed."}
+        {"source":"MODEL","type":"CODE_ACTION","content":"Created file hello.txt"}
+        """
+        XCTAssertNil(AgyTranscript.lastAssistantText(inTail: Data(tail.utf8)))
+    }
+
     func testAskQuestionWinsAsHandoff() {
         let tail = """
         {"source":"MODEL","type":"PLANNER_RESPONSE","content":"Thinking"}

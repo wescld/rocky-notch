@@ -363,6 +363,37 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertNil(s.hookPid)
     }
 
+    func testAgyPrefersLatestRecordsInTheTail() throws {
+        let brain = tempRoot.appendingPathComponent(
+            ".gemini/antigravity-cli/brain", isDirectory: true
+        )
+        let conv = brain.appendingPathComponent("tail-id", isDirectory: true)
+        let logs = conv.appendingPathComponent(
+            ".system_generated/logs", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let transcript = logs.appendingPathComponent("transcript.jsonl")
+        var body = ""
+        for i in 0..<80 {
+            body += #"{"type":"CHECKPOINT","created_at":"2026-04-03T03:10:00Z","i":\#(i)}"# + "\n"
+        }
+        body += """
+        {"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-04-03T03:20:06Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"npm test","Cwd":"/tmp/late-repo"}}]}
+        """
+        try body.write(to: transcript, atomically: true, encoding: .utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-04-03T03:20:10Z")!
+        try setMtime(transcript, to: now)
+
+        let sessions = SessionDiscovery.discoverAgy(
+            rootURL: brain,
+            now: now,
+            maxBytesPerFile: 400
+        )
+        let s = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(s.cwd, "/tmp/late-repo")
+        XCTAssertEqual(s.lastAction, "running npm test")
+    }
+
     func testAgySkipsTranscriptWithoutCwd() throws {
         let brain = tempRoot.appendingPathComponent(
             ".gemini/antigravity-cli/brain", isDirectory: true

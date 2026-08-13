@@ -477,26 +477,36 @@ public enum SessionDiscovery {
         var task: String?
         var lastAction: String?
 
-        forEachJSONLLine(at: fileURL, maxBytes: maxBytes) { object in
+        // The user request is at the start; the latest tool call (cwd +
+        // lastAction) is at the end. A head-only read of a large brain file
+        // would miss the cwd and drop the row, or keep a stale action.
+        forEachJSONLLine(at: fileURL, maxBytes: min(maxBytes, 64 * 1_024)) { object in
+            guard task == nil,
+                  object["type"] as? String == "USER_INPUT",
+                  let content = object["content"] as? String,
+                  let request = AgyTranscript.userRequest(from: content)
+            else { return }
+            task = SessionStore.displayTask(from: request)
+        }
+        forEachJSONLTail(at: fileURL, maxBytes: maxBytes) { object in
             if let ts = parseTimestamp(object["created_at"]) {
                 updatedAt = ts
             }
-            let type = object["type"] as? String
-            if type == "USER_INPUT",
+            if task == nil,
+               object["type"] as? String == "USER_INPUT",
                let content = object["content"] as? String,
-               let request = AgyTranscript.userRequest(from: content),
-               task == nil {
+               let request = AgyTranscript.userRequest(from: content) {
                 task = SessionStore.displayTask(from: request)
             }
-            if type == "PLANNER_RESPONSE",
-               let calls = object["tool_calls"] as? [[String: Any]],
-               let last = calls.last,
-               let name = last["name"] as? String {
-                let args = AgyTranscript.unquoteArgs(last["args"] as? [String: Any])
-                lastAction = TranscriptTail.friendly(tool: name, input: args)
-                if cwd == nil, let found = cwdFromAgyArgs(args) {
-                    cwd = found
-                }
+            guard object["type"] as? String == "PLANNER_RESPONSE",
+                  let calls = object["tool_calls"] as? [[String: Any]],
+                  let last = calls.last,
+                  let name = last["name"] as? String
+            else { return }
+            let args = AgyTranscript.unquoteArgs(last["args"] as? [String: Any])
+            lastAction = TranscriptTail.friendly(tool: name, input: args)
+            if let found = cwdFromAgyArgs(args) {
+                cwd = found
             }
         }
 
@@ -523,6 +533,48 @@ public enum SessionDiscovery {
             return (file as NSString).deletingLastPathComponent
         }
         return nil
+    }
+
+    /// Stream the last `maxBytes` of a JSONL file. The first (possibly
+    /// truncated) line after the seek is discarded.
+    private static func forEachJSONLTail(
+        at fileURL: URL,
+        maxBytes: Int,
+        body: ([String: Any]) -> Void
+    ) {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return }
+        let offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        guard (try? handle.seek(toOffset: offset)) != nil else { return }
+
+        var buffer = Data()
+        var skippedPartial = offset > 0
+        while let chunk = try? handle.read(upToCount: streamingChunkSize), !chunk.isEmpty {
+            buffer.append(chunk)
+            var lines = extractCompleteLines(from: &buffer)
+            if skippedPartial {
+                if !lines.isEmpty {
+                    lines.removeFirst()
+                    skippedPartial = false
+                } else {
+                    continue
+                }
+            }
+            for line in lines {
+                guard let data = line.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { continue }
+                body(object)
+            }
+        }
+        if !skippedPartial, !buffer.isEmpty {
+            let trailing = String(decoding: buffer, as: UTF8.self)
+            if let data = trailing.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                body(object)
+            }
+        }
     }
 
     /// Stream JSONL lines up to `maxBytes` without loading the whole file.

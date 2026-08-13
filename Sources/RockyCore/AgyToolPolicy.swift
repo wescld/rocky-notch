@@ -48,6 +48,14 @@ public enum AgyToolPolicy {
 
     /// PreToolUse should not open a Rocky card when the tool is read-only or
     /// Agy is already in always-proceed / skip-permissions.
+    /// Session-level skip flags that live on the `agy` argv, not in settings.
+    public static func permissionMode(fromArguments arguments: [String]) -> String? {
+        if arguments.contains("--dangerously-skip-permissions") {
+            return "dangerously-skip-permissions"
+        }
+        return nil
+    }
+
     public static func shouldSkipRockyGate(
         toolName: String?,
         permissionMode: String? = nil,

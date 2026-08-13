@@ -62,6 +62,9 @@ public enum AgyTranscript {
                 continue
             }
             if type == "CODE_ACTION" || type == "VIEW_FILE" || type == "CHECKPOINT" {
+                // Work happened after any earlier prose, so that prose was
+                // narration, not the closing handoff.
+                last = nil
                 continue
             }
             if let content = cleanContent(object["content"] as? String), source == "MODEL" {

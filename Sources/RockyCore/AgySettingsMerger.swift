@@ -96,26 +96,9 @@ public enum AgySettingsMerger {
 
     public static func unmerge(settings data: Data?) throws -> Data {
         var root = try parse(data)
+        // Only the group we own. Other named hooks are the user's, even if a
+        // command string happens to mention rocky-hook.
         root[hookName] = nil
-        // Also sweep any other named hook whose command still points at us
-        // (older experiments, renamed groups).
-        for (name, value) in root {
-            guard name != hookName, var group = value as? [String: Any] else { continue }
-            var touched = false
-            for (event, eventValue) in group {
-                guard var entries = eventValue as? [[String: Any]] else { continue }
-                let before = entries.count
-                entries.removeAll { isOurGroup($0) || isOurHandler($0) }
-                if entries.count != before {
-                    group[event] = entries.isEmpty ? nil : entries
-                    touched = true
-                }
-            }
-            if touched {
-                let remainingEvents = group.keys.filter { $0 != "enabled" }
-                root[name] = remainingEvents.isEmpty ? nil : group
-            }
-        }
         return try serialize(root)
     }
 

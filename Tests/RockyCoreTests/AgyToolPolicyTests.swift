@@ -54,6 +54,27 @@ final class AgyToolPolicyTests: XCTestCase {
         )
     }
 
+    func testLaunchFlagFromArguments() {
+        XCTAssertEqual(
+            AgyToolPolicy.permissionMode(fromArguments: [
+                "agy", "--dangerously-skip-permissions", "-p", "hi",
+            ]),
+            "dangerously-skip-permissions"
+        )
+        XCTAssertNil(
+            AgyToolPolicy.permissionMode(fromArguments: ["agy", "-p", "hi"])
+        )
+        XCTAssertTrue(
+            AgyToolPolicy.shouldSkipRockyGate(
+                toolName: "run_command",
+                permissionMode: AgyToolPolicy.permissionMode(
+                    fromArguments: ["agy", "--dangerously-skip-permissions"]
+                ),
+                home: "/tmp/no-such-home"
+            )
+        )
+    }
+
     func testConfigSaysAlwaysProceed() {
         XCTAssertTrue(
             AgyToolPolicy.configSaysAlwaysProceed(["toolPermission": "always-proceed"])
