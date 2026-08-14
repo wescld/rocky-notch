@@ -37,11 +37,20 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
     /// see `metaPath(transcriptPath:agentId:)` — because no hook payload
     /// carries it.
     public var model: String?
+    /// The subagent that spawned this one — the payload flattens nested
+    /// subagents into one list, so ancestry only exists in the sidecar.
+    /// Display only: it decides which row this one indents under, never
+    /// whether the row exists. Absent on roots, on non-subagents, and until
+    /// the sidecar has been read, and those three are indistinguishable here
+    /// on purpose — all of them render at top level.
+    public var parentAgentId: String?
 
     /// Deliberately the payload's own spelling, so the wire shape, the IPC hop
     /// and the on-disk snapshot are all one format — there is no second
-    /// representation to keep in sync. `last_action` and `model` are Rocky's
-    /// additions and simply never appear in an agent's payload.
+    /// representation to keep in sync. `last_action`, `model` and
+    /// `parent_agent_id` are Rocky's additions and simply never appear in an
+    /// agent's payload today; `parent_agent_id` is decoded from it anyway so
+    /// that a CLI which starts reporting ancestry wins over the sidecar.
     enum CodingKeys: String, CodingKey {
         case id
         case kind = "type"
@@ -51,6 +60,7 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         case command
         case lastAction = "last_action"
         case model
+        case parentAgentId = "parent_agent_id"
     }
 
     public init(
@@ -61,7 +71,8 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         agentType: String? = nil,
         command: String? = nil,
         lastAction: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        parentAgentId: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -71,6 +82,7 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         self.command = command
         self.lastAction = lastAction
         self.model = model
+        self.parentAgentId = Self.normalizedParent(parentAgentId)
     }
 
     /// Decodes one payload entry, falling back to a synthetic id.
@@ -84,6 +96,14 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         command = payload["command"]?.stringValue
         lastAction = nil
         model = nil
+        parentAgentId = Self.normalizedParent(payload["parent_agent_id"]?.stringValue)
+    }
+
+    /// An empty parent is no parent. Without this, "" would enter the cycle
+    /// guard and the orphan fallback as a real id.
+    static func normalizedParent(_ raw: String?) -> String? {
+        guard let raw, !raw.isEmpty else { return nil }
+        return raw
     }
 
     /// Decodes the whole `background_tasks` array.
@@ -211,6 +231,92 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
         return first.uppercased() + raw.dropFirst()
     }
 
+    /// One drawn line of the delegated group: which task, and how deep its
+    /// visible ancestry runs. Depth 0 is a top-level row.
+    public struct DisplayRow: Equatable, Sendable, Identifiable {
+        public let task: BackgroundTask
+        public let depth: Int
+        public var id: String { task.id }
+
+        public init(task: BackgroundTask, depth: Int) {
+            self.task = task
+            self.depth = depth
+        }
+    }
+
+    /// Lays the flat payload list out as a forest and applies the row cap.
+    ///
+    /// The list stays authoritative — ancestry decides *where* a row draws,
+    /// never *whether* it draws. Every input task comes back exactly once,
+    /// either drawn or in the overflow; the invariants that keep that true:
+    ///
+    /// - An edge counts only between two subagent entries that are both in the
+    ///   list, and never to itself. Anything else — parent gone, parent is a
+    ///   shell, the task itself is a shell, empty id — makes the task a root.
+    ///   A parent that finished is not an error state: its children *are* the
+    ///   work now, so they promote to top level with no badge and no memory
+    ///   of the indent.
+    /// - Roots draw first, in payload order. Children only take slots left
+    ///   over once every root is drawn, in forest order, and only under a
+    ///   parent that is itself drawn — the cap may push children into the
+    ///   overflow, but it never buries a root under another root's fan-out.
+    /// - A cycle has no root, so after the root walk every unvisited task
+    ///   promotes to top level and its intact descendants follow it. Each id
+    ///   is visited once; malformed ancestry degrades to the flat list rather
+    ///   than looping or dropping a row.
+    public static func displayRows(
+        _ tasks: [BackgroundTask],
+        cap: Int
+    ) -> (rows: [DisplayRow], overflow: [BackgroundTask]) {
+        let byID = Dictionary(tasks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func parent(of task: BackgroundTask) -> String? {
+            guard task.isSubagent,
+                  let parent = normalizedParent(task.parentAgentId),
+                  parent != task.id,
+                  byID[parent]?.isSubagent == true
+            else { return nil }
+            return parent
+        }
+        var children: [String: [BackgroundTask]] = [:]
+        for task in tasks where parent(of: task) != nil {
+            children[parent(of: task)!, default: []].append(task)
+        }
+
+        // Forest order: every task once, parents before their descendants,
+        // cycles broken by promoting whatever the root walk never reached.
+        var visited: Set<String> = []
+        var forest: [DisplayRow] = []
+        func walk(_ task: BackgroundTask, depth: Int) {
+            guard visited.insert(task.id).inserted else { return }
+            forest.append(DisplayRow(task: task, depth: depth))
+            for child in children[task.id, default: []] {
+                walk(child, depth: depth + 1)
+            }
+        }
+        for task in tasks where parent(of: task) == nil {
+            walk(task, depth: 0)
+        }
+        for task in tasks {
+            walk(task, depth: 0)
+        }
+
+        guard forest.count > cap else { return (forest, []) }
+        var drawn: Set<String> = []
+        for row in forest where row.depth == 0 {
+            guard drawn.count < cap else { break }
+            drawn.insert(row.id)
+        }
+        for row in forest where row.depth > 0 {
+            guard drawn.count < cap else { break }
+            guard let parent = parent(of: row.task), drawn.contains(parent) else { continue }
+            drawn.insert(row.id)
+        }
+        return (
+            forest.filter { drawn.contains($0.id) },
+            tasks.filter { !drawn.contains($0.id) }
+        )
+    }
+
     /// Sidecar Claude Code writes next to a subagent's transcript:
     /// `<transcript without .jsonl>/subagents/agent-<agentId>.meta.json`.
     /// It is the only place the subagent's model appears.
@@ -225,11 +331,19 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
 }
 
 /// The subagent sidecar, as written by Claude Code:
-/// `{"agentType":"general-purpose","description":"…","model":"fable", …}`.
+/// `{"agentType":"general-purpose","description":"…","model":"fable",
+///   "parentAgentId":"af0b…","spawnDepth":2, …}`.
+///
+/// `parentAgentId` only appears on nested subagents (one spawned by another
+/// subagent); its absence after a successful read means this agent is a root.
+/// `spawnDepth` is deliberately not read: display depth must come from the
+/// ancestors actually visible in the list, or a child whose parent is gone
+/// would indent under nothing.
 public struct SubagentMeta: Equatable, Sendable {
     public let agentType: String?
     public let description: String?
     public let model: String?
+    public let parentAgentId: String?
 
     public init?(_ data: Data) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -238,6 +352,7 @@ public struct SubagentMeta: Equatable, Sendable {
         agentType = root["agentType"] as? String
         description = root["description"] as? String
         model = root["model"] as? String
-        if agentType == nil, description == nil, model == nil { return nil }
+        parentAgentId = BackgroundTask.normalizedParent(root["parentAgentId"] as? String)
+        if agentType == nil, description == nil, model == nil, parentAgentId == nil { return nil }
     }
 }
