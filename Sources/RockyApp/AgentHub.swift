@@ -147,6 +147,7 @@ final class AgentHub: ObservableObject {
         }
         for sessionId in before.subtracting(Set(store.sessions.keys)) {
             transcripts.unwatch(sessionId: sessionId)
+            forgetSubagentTracking(sessionId: sessionId)
         }
         if before != Set(store.sessions.keys) {
             markPersistDirty()
@@ -356,14 +357,17 @@ final class AgentHub: ObservableObject {
         }
         if knownBefore.contains(sessionId), store.sessions[sessionId] == nil {
             transcripts.unwatch(sessionId: sessionId)
+            forgetSubagentTracking(sessionId: sessionId)
         }
         // Only when the agent just told us what is in flight. Running it on
         // every event meant each subagent tool call spawned another scan and
         // re-read every sidecar still missing — N events across M children
         // became N×M concurrent reads of files that were not there yet.
         if envelope.event.backgroundTasks != nil {
+            backgroundTasksRevision[sessionId, default: 0] += 1
             resolveSubagentMeta(sessionId: sessionId)
         }
+        trackSubagentSpawn(envelope)
         markPersistDirty()
 
         let session = store.sessions[envelope.event.sessionId]
@@ -402,6 +406,190 @@ final class AgentHub: ObservableObject {
         default:
             break
         }
+    }
+
+    /// The in-flight list only ships when something stops, so a subagent
+    /// spawned mid-turn is invisible for exactly as long as it runs — the
+    /// window the user is watching. `SubagentStart` (and, for sessions whose
+    /// hook snapshot predates that event, the child's first tool call) is the
+    /// live signal; the sidecar is the filter. Claude fires subagent hooks for
+    /// internal helpers too (session titling and friends), and the list that
+    /// normally keeps them out of the notch is precisely what has not arrived
+    /// yet — but helpers never write a sidecar, so "the file exists" proves
+    /// the spawn is real delegated work before any list can.
+    ///
+    /// Agent ids whose `SubagentStop` already fired, per session: the sidecar
+    /// read is asynchronous, and a mint landing after its agent stopped would
+    /// resurrect a finished row.
+    private var endedSubagents: [String: Set<String>] = [:]
+    /// Bumped whenever a payload carries the authoritative in-flight list.
+    /// A mint scheduled before a replace only lands if the replace still
+    /// lists its agent — minting adds rows early, it never keeps them late.
+    private var backgroundTasksRevision: [String: Int] = [:]
+    /// Sidecar probes spent, keyed "sessionId|agentId". One probe at a time
+    /// per agent, and at most two failed windows (spawn signal, then first
+    /// tool call) — a helper's missing file must not be re-stat'd on every
+    /// event, the N×M this file already fought once.
+    private enum SidecarProbe { case inFlight, done, failed(attempts: Int) }
+    private var sidecarProbes: [String: SidecarProbe] = [:]
+
+    /// A session left (SessionEnd, dismissal, pruning): its spawn-tracking
+    /// state goes with it. Claude reuses session ids across resumes, and
+    /// agent ids are unique per spawn, so dropping everything is always safe.
+    private func forgetSubagentTracking(sessionId: String) {
+        endedSubagents[sessionId] = nil
+        backgroundTasksRevision[sessionId] = nil
+        sidecarProbes = sidecarProbes.filter { !$0.key.hasPrefix(sessionId + "|") }
+    }
+
+    private func trackSubagentSpawn(_ envelope: HookEnvelope) {
+        guard envelope.agent == "claude-code",
+              let agentId = envelope.event.agentId, !agentId.isEmpty
+        else { return }
+        let sessionId = envelope.event.sessionId
+        switch envelope.event.kind {
+        case .subagentStart:
+            scheduleSubagentMint(
+                sessionId: sessionId,
+                agentId: agentId,
+                agentType: envelope.event.agentType,
+                eventTranscriptPath: envelope.event.transcriptPath,
+                lastAction: nil
+            )
+        case .postToolUse:
+            // Old hook snapshot: the session was started before SubagentStart
+            // was installed, so the child's own tool calls are the only spawn
+            // signal there is. A row that already exists needs nothing.
+            guard let session = store.sessions[sessionId],
+                  !session.backgroundTasks.contains(where: { $0.id == agentId })
+            else { return }
+            // This event's action had no row to land on (`noteSubagentActivity`
+            // returned); carry it into the mint or the row starts blank until
+            // the child's next tool call.
+            scheduleSubagentMint(
+                sessionId: sessionId,
+                agentId: agentId,
+                agentType: envelope.event.agentType,
+                eventTranscriptPath: envelope.event.transcriptPath,
+                lastAction: envelope.event.toolName.map {
+                    TranscriptTail.friendly(
+                        tool: $0,
+                        input: envelope.event.toolInput?.objectValue
+                    )
+                }
+            )
+        case .subagentStop:
+            endedSubagents[sessionId, default: []].insert(agentId)
+        default:
+            break
+        }
+    }
+
+    private func scheduleSubagentMint(
+        sessionId: String,
+        agentId: String,
+        agentType: String?,
+        eventTranscriptPath: String?,
+        lastAction: String?
+    ) {
+        let key = sessionId + "|" + agentId
+        var priorFailures = 0
+        switch sidecarProbes[key] {
+        case .inFlight, .done:
+            return
+        case .failed(let attempts):
+            guard attempts < 2 else { return }
+            priorFailures = attempts
+        case nil:
+            break
+        }
+        if endedSubagents[sessionId]?.contains(agentId) == true { return }
+        // The sidecar sits beside the *parent's* transcript. SubagentStart
+        // carries the parent's path (probed on 2.1.234), so it can stand in
+        // before any event recorded one on the session.
+        guard let transcriptPath = store.sessions[sessionId]?.transcriptPath
+                ?? eventTranscriptPath,
+              let metaPath = RockyCore.BackgroundTask.metaPath(
+                  transcriptPath: transcriptPath,
+                  agentId: agentId
+              )
+        else { return }
+        sidecarProbes[key] = .inFlight
+        let revision = backgroundTasksRevision[sessionId, default: 0]
+        Task.detached(priority: .utility) {
+            // The sidecar is born in the same second as SubagentStart, but the
+            // hook usually outruns the write; a short window absorbs the race.
+            var sidecar: Data?
+            for attempt in 0..<4 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
+                sidecar = try? Data(contentsOf: URL(fileURLWithPath: metaPath))
+                if sidecar != nil { break }
+            }
+            let data = sidecar
+            await MainActor.run { [weak self] in
+                self?.finishSubagentMint(
+                    sessionId: sessionId,
+                    agentId: agentId,
+                    agentType: agentType,
+                    key: key,
+                    sidecar: data,
+                    scheduledRevision: revision,
+                    priorFailures: priorFailures,
+                    lastAction: lastAction
+                )
+            }
+        }
+    }
+
+    /// Back on the main actor with the sidecar read (or not). Existence is
+    /// the gate; parsing is enrichment — a real agent whose sidecar carried
+    /// nothing Rocky reads still deserves its row, with the payload's type.
+    private func finishSubagentMint(
+        sessionId: String,
+        agentId: String,
+        agentType: String?,
+        key: String,
+        sidecar: Data?,
+        scheduledRevision: Int,
+        priorFailures: Int,
+        lastAction: String?
+    ) {
+        guard store.sessions[sessionId] != nil else {
+            // Rocky met this spawn before the session itself (fresh launch
+            // mid-session). Forget the probe: the next signal retries with a
+            // session for the row to land in, and the enrichment pass keeps
+            // its own first read of the sidecar.
+            sidecarProbes[key] = nil
+            return
+        }
+        guard let sidecar else {
+            sidecarProbes[key] = .failed(attempts: priorFailures + 1)
+            return
+        }
+        sidecarProbes[key] = .done
+        // One read answered everything the enrichment pass would ask later.
+        resolvedSubagentSidecars.insert(agentId)
+        // The list may have spoken while the file was read. A replace that
+        // arrived meanwhile and does not know this agent outranks the mint;
+        // one that confirms it leaves a row for the fields to fill into.
+        if backgroundTasksRevision[sessionId, default: 0] != scheduledRevision,
+           store.sessions[sessionId]?.backgroundTasks
+               .contains(where: { $0.id == agentId }) != true {
+            return
+        }
+        if endedSubagents[sessionId]?.contains(agentId) == true { return }
+        let meta = SubagentMeta(sidecar)
+        store.mintSubagent(
+            sessionId: sessionId,
+            agentId: agentId,
+            agentType: agentType ?? meta?.agentType,
+            description: meta?.description,
+            model: meta?.model,
+            parentAgentId: meta?.parentAgentId,
+            lastAction: lastAction,
+            at: Date()
+        )
+        markPersistDirty()
     }
 
     /// Neither a subagent's model ("fable") nor its parent appears in any hook
@@ -451,6 +639,10 @@ final class AgentHub: ObservableObject {
                         sessionId: sessionId
                     )
                 }
+                // The enrichment landed after the event that scheduled it was
+                // persisted; without a fresh mark, a flush that already ran
+                // would drop it from the snapshot until the next event.
+                self?.markPersistDirty()
             }
         }
     }

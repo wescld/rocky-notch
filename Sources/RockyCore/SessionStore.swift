@@ -199,6 +199,12 @@ public struct SessionStore: Equatable, Sendable {
         case .sessionEnd:
             sessions[event.sessionId] = nil
             return
+        // The spawn signal never enters the state machine: minting is the
+        // hub's job (it needs the on-disk sidecar to tell real work from an
+        // internal helper), and a SubagentStart stripped of its agent id
+        // carries nothing a session could act on.
+        case .subagentStart:
+            return
         case .sessionStart, .stop, .subagentStop, .notification,
              .permissionRequest, .postToolUse, .userPromptSubmit, .unknown:
             break
@@ -354,7 +360,8 @@ public struct SessionStore: Equatable, Sendable {
             case .idle, .delegating:
                 session.status = Self.restingStatus(of: session)
             }
-        case .sessionEnd, .unknown:
+        // subagentStart returned above; listed to keep the switch exhaustive.
+        case .sessionEnd, .subagentStart, .unknown:
             break
         }
 
@@ -424,6 +431,81 @@ public struct SessionStore: Equatable, Sendable {
         if let parent = BackgroundTask.normalizedParent(parentAgentId) {
             sessions[sessionId]?.backgroundTasks[index].parentAgentId = parent
         }
+    }
+
+    /// A subagent just spawned — `SubagentStart`, or its first tool call under
+    /// a hook snapshot that predates that event — and its sidecar proved it is
+    /// real delegated work (internal helpers never write one; the hub owns
+    /// that read, which is why this is a separate entry point and not part of
+    /// `apply`). The in-flight list stays authoritative: it only arrives when
+    /// something stops, so minting is what lets the row exist *while* the work
+    /// runs, and the next wholesale replace removes anything the CLI does not
+    /// vouch for. On a row that already exists — the payload announced it, or
+    /// an earlier mint did — only missing fields fill in: the payload said
+    /// everything else this could.
+    ///
+    /// A session at rest gains the same normalization `SubagentStop` applies:
+    /// resting with live children is delegating, not done. A running or
+    /// blocked session keeps its status — minting adds a row, never a state.
+    public mutating func mintSubagent(
+        sessionId: String,
+        agentId: String,
+        agentType: String?,
+        description: String?,
+        model: String?,
+        parentAgentId: String?,
+        lastAction: String? = nil,
+        at date: Date
+    ) {
+        guard var session = sessions[sessionId], !agentId.isEmpty else { return }
+        if let index = session.backgroundTasks.firstIndex(where: { $0.id == agentId }) {
+            var task = session.backgroundTasks[index]
+            guard task.isSubagent else { return }
+            if task.model == nil { task.model = model }
+            if task.parentAgentId == nil {
+                task.parentAgentId = BackgroundTask.normalizedParent(parentAgentId)
+            }
+            if task.lastAction == nil { task.lastAction = lastAction }
+            if task.description?.isEmpty != false, let description {
+                task = BackgroundTask(
+                    id: task.id,
+                    kind: task.kind,
+                    status: task.status,
+                    description: description,
+                    agentType: task.agentType ?? agentType,
+                    command: task.command,
+                    lastAction: task.lastAction,
+                    model: task.model,
+                    parentAgentId: task.parentAgentId
+                )
+            }
+            sessions[sessionId]?.backgroundTasks[index] = task
+            return
+        }
+        session.backgroundTasks.append(BackgroundTask(
+            id: agentId,
+            kind: "subagent",
+            status: "running",
+            description: description,
+            agentType: agentType,
+            lastAction: lastAction,
+            model: model,
+            parentAgentId: parentAgentId
+        ))
+        switch session.status {
+        case .idle, .delegating:
+            session.status = Self.restingStatus(of: session)
+        case .running, .waitingPermission, .waitingInput:
+            break
+        }
+        // The mint lands after an async read; the clock only ever moves
+        // forward, so a fresher event that raced in between keeps its time.
+        let gap = date.timeIntervalSince(session.lastEventAt)
+        if gap > 0 {
+            session.activeSeconds += min(gap, 5 * 60)
+            session.lastEventAt = date
+        }
+        sessions[sessionId] = session
     }
 
     /// A subagent ran a tool. Deliberately outside the state machine: it

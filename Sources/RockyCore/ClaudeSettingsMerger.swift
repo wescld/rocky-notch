@@ -32,11 +32,15 @@ public enum ClaudeSettingsMerger {
         ("SessionEnd", false),
         ("UserPromptSubmit", false),
         ("Stop", false),
+        // The spawn signal. Everything it carries also arrives in the
+        // in-flight list — but that list only ships on Stop/SubagentStop, so
+        // without this event a subagent spawned mid-turn stays invisible for
+        // exactly as long as it runs. The list remains authoritative for
+        // removal; SubagentStart only lets a row exist while the work does.
+        ("SubagentStart", false),
         // The only event that reports what a parked session is still waiting
         // on. Without it, a turn that ended by delegating reads as finished
-        // and never learns when its last agent came back. SubagentStart is
-        // deliberately not installed: everything it carries also arrives in
-        // the in-flight list, so it would be a hook for no new information.
+        // and never learns when its last agent came back.
         ("SubagentStop", false),
         ("Notification", false),
         ("PostToolUse", false),
