@@ -286,6 +286,21 @@ final class SubagentMintTests: XCTestCase {
         XCTAssertEqual(restored.status, .idle)
     }
 
+    // MARK: - Sidecar path safety
+
+    /// The agent id names a file inside `subagents/`; a separator or a
+    /// dot-segment would resolve outside it. Ids come from hook payloads.
+    func testMetaPathRejectsTraversalInAgentId() {
+        let transcript = "/tmp/t/s1.jsonl"
+        XCTAssertNotNil(BackgroundTask.metaPath(transcriptPath: transcript, agentId: "ag1"))
+        for bad in ["", ".", "..", "../ag1", "a/b", "a\\b", "../../etc/passwd"] {
+            XCTAssertNil(
+                BackgroundTask.metaPath(transcriptPath: transcript, agentId: bad),
+                "expected nil for agentId \(bad)"
+            )
+        }
+    }
+
     // MARK: - Hook install
 
     func testClaudeEventsIncludeSubagentStart() {

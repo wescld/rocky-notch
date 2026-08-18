@@ -117,6 +117,7 @@ final class AgentHub: ObservableObject {
             server.reply(.passthrough, to: requestId)
         }
         transcripts.unwatch(sessionId: sessionId)
+        forgetSubagentTracking(sessionId: sessionId)
         celebrating.remove(sessionId)
         markPersistDirty()
     }
@@ -567,8 +568,6 @@ final class AgentHub: ObservableObject {
             return
         }
         sidecarProbes[key] = .done
-        // One read answered everything the enrichment pass would ask later.
-        resolvedSubagentSidecars.insert(agentId)
         // The list may have spoken while the file was read. A replace that
         // arrived meanwhile and does not know this agent outranks the mint;
         // one that confirms it leaves a row for the fields to fill into.
@@ -578,6 +577,11 @@ final class AgentHub: ObservableObject {
             return
         }
         if endedSubagents[sessionId]?.contains(agentId) == true { return }
+        // One read answered everything the enrichment pass would ask later.
+        // Marked only past the guards: a rejected mint applied nothing, so if
+        // the payload later announces this agent anyway, the enrichment pass
+        // must still be allowed its own read.
+        resolvedSubagentSidecars.insert(agentId)
         let meta = SubagentMeta(sidecar)
         store.mintSubagent(
             sessionId: sessionId,
