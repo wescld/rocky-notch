@@ -59,7 +59,7 @@ final class AgentHub: ObservableObject {
 
     func start() {
         restoreSessionsFromDisk()
-        // Agent-written JSONL (Claude/Codex) — observational rows only; does
+        // Agent-written JSONL (Claude/Codex/Agy) — observational rows only; does
         // not invent permissions. I/O is off the main thread so launch stays
         // snappy even when transcript roots are large.
         discoverSessionsFromTranscripts()
@@ -181,7 +181,7 @@ final class AgentHub: ObservableObject {
         )
         let restorable = tracked + observational
         store.restore(restorable)
-        for session in restorable where session.agent == "claude-code" {
+        for session in restorable where session.agent == "claude-code" || session.agent == "agy" {
             if let path = session.transcriptPath {
                 transcripts.watch(sessionId: session.id, path: path)
             }
@@ -210,7 +210,8 @@ final class AgentHub: ObservableObject {
                           self.store.sessions[session.id] != nil
                     else { continue }
                     seeded += 1
-                    if session.agent == "claude-code", let path = session.transcriptPath {
+                    if (session.agent == "claude-code" || session.agent == "agy"),
+                       let path = session.transcriptPath {
                         self.transcripts.watch(sessionId: session.id, path: path)
                     }
                 }
@@ -347,9 +348,9 @@ final class AgentHub: ObservableObject {
         }
 
         // Transcript enrichment follows the session's lifetime. Codex marks
-        // its transcript_path as unstable for hooks; only tail Claude's.
+        // its transcript_path as unstable for hooks; Claude and Agy are safe.
         let sessionId = envelope.event.sessionId
-        if envelope.agent == "claude-code",
+        if envelope.agent == "claude-code" || envelope.agent == "agy",
            let path = store.sessions[sessionId]?.transcriptPath {
             transcripts.watch(sessionId: sessionId, path: path)
         }

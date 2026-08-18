@@ -39,4 +39,25 @@ final class EditDiffTests: XCTestCase {
         XCTAssertEqual(diff.additions, 0)
         XCTAssertEqual(diff.removals, 0)
     }
+
+    func testAgyReplaceFileContent() throws {
+        let input = JSONValue.object([
+            "TargetFile": .string("/a/m.ts"),
+            "TargetContent": .string("old"),
+            "ReplacementContent": .string("new"),
+        ])
+        let diff = try XCTUnwrap(EditDiff.from(toolName: "replace_file_content", input: input))
+        XCTAssertEqual(diff.removals, 1)
+        XCTAssertEqual(diff.additions, 1)
+    }
+
+    func testAgyWriteToFile() throws {
+        let input = JSONValue.object([
+            "TargetFile": .string("/a/hello.txt"),
+            "CodeContent": .string("hi"),
+        ])
+        let diff = try XCTUnwrap(EditDiff.from(toolName: "write_to_file", input: input))
+        XCTAssertEqual(diff.additions, 1)
+        XCTAssertEqual(diff.removals, 0)
+    }
 }

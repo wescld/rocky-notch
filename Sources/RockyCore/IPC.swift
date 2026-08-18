@@ -98,7 +98,7 @@ public enum PermissionRequestOutput {
     /// continues fail-open).
     ///
     /// Claude Code and Codex use `hookSpecificOutput` + `behavior`.
-    /// Grok's PreToolUse hooks expect `{"decision":"allow|deny"}`.
+    /// Grok's and Agy's PreToolUse hooks expect `{"decision":"allow|deny"}`.
     /// Cursor expects snake_case:
     /// `{"continue":bool,"permission":"allow|deny|ask","user_message":…,"agent_message":…}`.
     public static func stdout(
@@ -128,7 +128,7 @@ public enum PermissionRequestOutput {
             }
             // OpenCode's JS bridge parses a simple decision object (same shape
             // as Grok) — not Claude's nested hookSpecificOutput.
-            if agent == "opencode" {
+            if agent == "opencode" || agent == "agy" {
                 return grokStdout(for: decision)
             }
             return claudeStdout(for: decision, updatedInput: updatedInput)

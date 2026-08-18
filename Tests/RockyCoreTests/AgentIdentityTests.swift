@@ -91,6 +91,30 @@ final class AgentIdentityTests: XCTestCase {
         )
     }
 
+    func testExplicitAgyAgent() {
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "agy", "--event", "PreToolUse"],
+                environment: [:]
+            ),
+            "agy"
+        )
+        XCTAssertEqual(
+            AgentIdentity.flagValue(
+                "--event",
+                in: ["rocky-hook", "--agent", "agy", "--event", "Stop"]
+            ),
+            "Stop"
+        )
+        XCTAssertEqual(
+            AgentIdentity.resolve(
+                arguments: ["rocky-hook", "--agent", "agy"],
+                environment: grokEnv
+            ),
+            "agy"
+        )
+    }
+
     func testExplicitOpenCodeAgent() {
         XCTAssertEqual(
             AgentIdentity.resolve(

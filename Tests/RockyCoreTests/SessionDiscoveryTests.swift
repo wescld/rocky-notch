@@ -324,6 +324,95 @@ final class SessionDiscoveryTests: XCTestCase {
         XCTAssertEqual(sessions.first(where: { $0.id == "c2" })?.agent, "codex")
     }
 
+    // MARK: - Agy
+
+    func testAgyDiscoversBrainTranscript() throws {
+        let brain = tempRoot.appendingPathComponent(
+            ".gemini/antigravity-cli/brain", isDirectory: true
+        )
+        let conv = brain.appendingPathComponent(
+            "ec33ebf9-0cba-4100-8142-c61503f6c587", isDirectory: true
+        )
+        let logs = conv.appendingPathComponent(
+            ".system_generated/logs", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let transcript = logs.appendingPathComponent("transcript.jsonl")
+        let body = """
+        {"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-04-03T03:20:00Z","content":"<USER_REQUEST>\\nFix the flaky auth tests.\\n</USER_REQUEST>"}
+        {"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-04-03T03:20:06Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"\\"npm test\\"","Cwd":"\\"/tmp/demo-repo\\""}}]}
+        """
+        try body.write(to: transcript, atomically: true, encoding: .utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-04-03T03:20:10Z")!
+        try setMtime(transcript, to: now)
+
+        let sessions = SessionDiscovery.discoverAgy(
+            rootURL: brain,
+            now: now,
+            maxAge: 2 * 60 * 60
+        )
+        XCTAssertEqual(sessions.count, 1)
+        let s = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(s.id, "ec33ebf9-0cba-4100-8142-c61503f6c587")
+        XCTAssertEqual(s.agent, "agy")
+        XCTAssertEqual(s.cwd, "/tmp/demo-repo")
+        XCTAssertEqual(s.status, .idle)
+        XCTAssertEqual(s.task, "Fix the flaky auth tests.")
+        XCTAssertEqual(s.lastAction, "running npm test")
+        XCTAssertNil(s.pending)
+        XCTAssertNil(s.hookPid)
+    }
+
+    func testAgyPrefersLatestRecordsInTheTail() throws {
+        let brain = tempRoot.appendingPathComponent(
+            ".gemini/antigravity-cli/brain", isDirectory: true
+        )
+        let conv = brain.appendingPathComponent("tail-id", isDirectory: true)
+        let logs = conv.appendingPathComponent(
+            ".system_generated/logs", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let transcript = logs.appendingPathComponent("transcript.jsonl")
+        var body = ""
+        for i in 0..<80 {
+            body += #"{"type":"CHECKPOINT","created_at":"2026-04-03T03:10:00Z","i":\#(i)}"# + "\n"
+        }
+        body += """
+        {"source":"MODEL","type":"PLANNER_RESPONSE","created_at":"2026-04-03T03:20:06Z","tool_calls":[{"name":"run_command","args":{"CommandLine":"npm test","Cwd":"/tmp/late-repo"}}]}
+        """
+        try body.write(to: transcript, atomically: true, encoding: .utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-04-03T03:20:10Z")!
+        try setMtime(transcript, to: now)
+
+        let sessions = SessionDiscovery.discoverAgy(
+            rootURL: brain,
+            now: now,
+            maxBytesPerFile: 400
+        )
+        let s = try XCTUnwrap(sessions.first)
+        XCTAssertEqual(s.cwd, "/tmp/late-repo")
+        XCTAssertEqual(s.lastAction, "running npm test")
+    }
+
+    func testAgySkipsTranscriptWithoutCwd() throws {
+        let brain = tempRoot.appendingPathComponent(
+            ".gemini/antigravity-cli/brain", isDirectory: true
+        )
+        let conv = brain.appendingPathComponent("no-cwd", isDirectory: true)
+        let logs = conv.appendingPathComponent(
+            ".system_generated/logs", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let transcript = logs.appendingPathComponent("transcript.jsonl")
+        try #"{"type":"USER_INPUT","created_at":"2026-04-03T03:20:00Z","content":"<USER_REQUEST>hi</USER_REQUEST>"}"#
+            .write(to: transcript, atomically: true, encoding: .utf8)
+        let now = ISO8601DateFormatter().date(from: "2026-04-03T03:20:10Z")!
+        try setMtime(transcript, to: now)
+
+        let sessions = SessionDiscovery.discoverAgy(rootURL: brain, now: now)
+        XCTAssertTrue(sessions.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func setMtime(_ url: URL, to date: Date) throws {

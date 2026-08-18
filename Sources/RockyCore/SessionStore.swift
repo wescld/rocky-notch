@@ -234,6 +234,7 @@ public struct SessionStore: Equatable, Sendable {
         session.hookPid = envelope.hookPid
         if let cwd = event.cwd { session.cwd = cwd }
         if let path = event.transcriptPath { session.transcriptPath = path }
+        if let model = event.model { session.model = model }
         if let jump = envelope.jumpTarget {
             session.jumpTarget = session.jumpTarget?.merging(jump) ?? jump
             // Prefer cwd from the jump target when the event omitted it.
@@ -309,7 +310,8 @@ public struct SessionStore: Equatable, Sendable {
             session.clearWaitForLiveActivity()
             // Kimi / OpenCode have no transcript for Rocky to tail; live
             // activity comes from PostToolUse (plugin bridge or hooks).
-            if envelope.agent == "kimi-code" || envelope.agent == "opencode",
+            if envelope.agent == "kimi-code" || envelope.agent == "opencode"
+                || envelope.agent == "agy",
                let toolName = event.toolName {
                 session.lastAction = TranscriptTail.friendly(
                     tool: toolName,

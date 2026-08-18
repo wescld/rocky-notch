@@ -3,7 +3,7 @@ import Foundation
 /// On-disk session discovery from agent-written JSONL transcripts.
 ///
 /// Complements `SessionPersistence` (Rocky's own snapshot + PID liveness):
-/// this finds Claude / Codex sessions even when Rocky was never running.
+/// this finds Claude / Codex / Agy sessions even when Rocky was never running.
 /// Discovered rows are always observational — status `.idle`, no pending
 /// permission, no host/agent PIDs. Live hooks still win via
 /// `SessionStore.restore` (fills missing ids only) + `apply`.
@@ -26,7 +26,11 @@ public enum SessionDiscovery {
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
-    /// Scan Claude + Codex transcript roots and return idle observational rows.
+    public static func agyBrainRoot(home: String = NSHomeDirectory()) -> URL {
+        AgyTranscript.brainRoot(home: home)
+    }
+
+    /// Scan Claude + Codex + Agy transcript roots and return idle observational rows.
     public static func discoverRecent(
         home: String = NSHomeDirectory(),
         now: Date = Date(),
@@ -51,7 +55,15 @@ public enum SessionDiscovery {
             maxFiles: maxFiles,
             maxBytesPerFile: maxBytesPerFile
         )
-        return (claude + codex).sorted { $0.lastEventAt > $1.lastEventAt }
+        let agy = discoverAgy(
+            rootURL: agyBrainRoot(home: home),
+            now: now,
+            fileManager: fileManager,
+            maxAge: maxAge,
+            maxFiles: maxFiles,
+            maxBytesPerFile: maxBytesPerFile
+        )
+        return (claude + codex + agy).sorted { $0.lastEventAt > $1.lastEventAt }
     }
 
     /// Drops discovered rows whose agent has no live process anywhere near the
@@ -193,6 +205,56 @@ public enum SessionDiscovery {
             byID[session.id] = session
         }
         return byID.values.sorted { $0.lastEventAt > $1.lastEventAt }
+    }
+
+    // MARK: - Agy
+
+    /// Walk `brain/<conversationId>/.system_generated/logs/transcript.jsonl`.
+    /// The enumerator would skip `.system_generated` (hidden), so we resolve
+    /// each conversation folder ourselves.
+    public static func discoverAgy(
+        rootURL: URL,
+        now: Date = Date(),
+        fileManager: FileManager = .default,
+        maxAge: TimeInterval = maxAge,
+        maxFiles: Int = maxFiles,
+        maxBytesPerFile: Int = maxBytesPerFile
+    ) -> [AgentSession] {
+        guard fileManager.fileExists(atPath: rootURL.path),
+              let conversations = try? fileManager.contentsOfDirectory(
+                at: rootURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+              )
+        else { return [] }
+
+        let cutoff = now.addingTimeInterval(-maxAge)
+        var candidates: [(url: URL, modifiedAt: Date, id: String)] = []
+        for folder in conversations {
+            let values = try? folder.resourceValues(forKeys: [.isDirectoryKey])
+            guard values?.isDirectory == true else { continue }
+            let transcript = folder
+                .appendingPathComponent(".system_generated/logs/transcript.jsonl")
+            guard fileManager.fileExists(atPath: transcript.path) else { continue }
+            let attrs = try? fileManager.attributesOfItem(atPath: transcript.path)
+            let modifiedAt = attrs?[.modificationDate] as? Date ?? .distantPast
+            guard modifiedAt >= cutoff else { continue }
+            candidates.append((transcript, modifiedAt, folder.lastPathComponent))
+        }
+
+        return Array(
+            candidates
+                .sorted { $0.modifiedAt > $1.modifiedAt }
+                .prefix(maxFiles)
+        )
+        .compactMap { candidate in
+            parseAgySession(
+                at: candidate.url,
+                sessionID: candidate.id,
+                fallbackUpdatedAt: candidate.modifiedAt,
+                maxBytes: maxBytesPerFile
+            )
+        }
     }
 
     // MARK: - Conversion
@@ -402,6 +464,117 @@ public enum SessionDiscovery {
             task: task,
             lastAction: lastAction
         )
+    }
+
+    private static func parseAgySession(
+        at fileURL: URL,
+        sessionID: String,
+        fallbackUpdatedAt: Date,
+        maxBytes: Int
+    ) -> AgentSession? {
+        var cwd: String?
+        var updatedAt = fallbackUpdatedAt
+        var task: String?
+        var lastAction: String?
+
+        // The user request is at the start; the latest tool call (cwd +
+        // lastAction) is at the end. A head-only read of a large brain file
+        // would miss the cwd and drop the row, or keep a stale action.
+        forEachJSONLLine(at: fileURL, maxBytes: min(maxBytes, 64 * 1_024)) { object in
+            guard task == nil,
+                  object["type"] as? String == "USER_INPUT",
+                  let content = object["content"] as? String,
+                  let request = AgyTranscript.userRequest(from: content)
+            else { return }
+            task = SessionStore.displayTask(from: request)
+        }
+        forEachJSONLTail(at: fileURL, maxBytes: maxBytes) { object in
+            if let ts = parseTimestamp(object["created_at"]) {
+                updatedAt = ts
+            }
+            if task == nil,
+               object["type"] as? String == "USER_INPUT",
+               let content = object["content"] as? String,
+               let request = AgyTranscript.userRequest(from: content) {
+                task = SessionStore.displayTask(from: request)
+            }
+            guard object["type"] as? String == "PLANNER_RESPONSE",
+                  let calls = object["tool_calls"] as? [[String: Any]],
+                  let last = calls.last,
+                  let name = last["name"] as? String
+            else { return }
+            let args = AgyTranscript.unquoteArgs(last["args"] as? [String: Any])
+            lastAction = TranscriptTail.friendly(tool: name, input: args)
+            if let found = cwdFromAgyArgs(args) {
+                cwd = found
+            }
+        }
+
+        guard let cwd, !cwd.isEmpty, !sessionID.isEmpty else { return nil }
+        return makeObservationalSession(
+            id: sessionID,
+            agent: "agy",
+            cwd: cwd,
+            lastEventAt: updatedAt,
+            transcriptPath: fileURL.path,
+            task: task,
+            lastAction: lastAction
+        )
+    }
+
+    private static func cwdFromAgyArgs(_ args: [String: Any]?) -> String? {
+        guard let args else { return nil }
+        if let value = args["Cwd"] as? String ?? args["cwd"] as? String,
+           !value.isEmpty {
+            return value
+        }
+        if let file = args["TargetFile"] as? String ?? args["AbsolutePath"] as? String,
+           !file.isEmpty {
+            return (file as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
+    /// Stream the last `maxBytes` of a JSONL file. The first (possibly
+    /// truncated) line after the seek is discarded.
+    private static func forEachJSONLTail(
+        at fileURL: URL,
+        maxBytes: Int,
+        body: ([String: Any]) -> Void
+    ) {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
+        defer { try? handle.close() }
+        guard let size = try? handle.seekToEnd() else { return }
+        let offset = size > UInt64(maxBytes) ? size - UInt64(maxBytes) : 0
+        guard (try? handle.seek(toOffset: offset)) != nil else { return }
+
+        var buffer = Data()
+        var skippedPartial = offset > 0
+        while let chunk = try? handle.read(upToCount: streamingChunkSize), !chunk.isEmpty {
+            buffer.append(chunk)
+            var lines = extractCompleteLines(from: &buffer)
+            if skippedPartial {
+                if !lines.isEmpty {
+                    lines.removeFirst()
+                    skippedPartial = false
+                } else {
+                    continue
+                }
+            }
+            for line in lines {
+                guard let data = line.data(using: .utf8),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else { continue }
+                body(object)
+            }
+        }
+        if !skippedPartial, !buffer.isEmpty {
+            let trailing = String(decoding: buffer, as: UTF8.self)
+            if let data = trailing.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                body(object)
+            }
+        }
     }
 
     /// Stream JSONL lines up to `maxBytes` without loading the whole file.

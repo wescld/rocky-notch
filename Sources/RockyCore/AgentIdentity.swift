@@ -28,12 +28,17 @@ public enum AgentIdentity {
         return fallback
     }
 
-    /// `--agent <name>`; ignored when the flag is last or the value is blank.
-    private static func explicitAgent(in arguments: [String]) -> String? {
-        guard let flag = arguments.firstIndex(of: "--agent"), flag + 1 < arguments.count else {
+    /// `--flag <value>`; ignored when the flag is last or the value is blank.
+    public static func flagValue(_ flag: String, in arguments: [String]) -> String? {
+        guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
             return nil
         }
-        let value = arguments[flag + 1].trimmingCharacters(in: .whitespaces)
+        let value = arguments[index + 1].trimmingCharacters(in: .whitespaces)
         return value.isEmpty ? nil : value
+    }
+
+    /// `--agent <name>`; ignored when the flag is last or the value is blank.
+    private static func explicitAgent(in arguments: [String]) -> String? {
+        flagValue("--agent", in: arguments)
     }
 }

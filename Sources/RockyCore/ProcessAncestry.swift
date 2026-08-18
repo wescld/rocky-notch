@@ -21,6 +21,8 @@ public enum ProcessAncestry {
             // Binary is `opencode`; Bun may appear in the tree when spawning
             // the bridge plugin's child rocky-hook process.
             return ["opencode"]
+        case "agy":
+            return ["agy"]
         default:
             return [agent.lowercased()]
         }
@@ -217,6 +219,40 @@ public enum ProcessAncestry {
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
         let parent = info.kp_eproc.e_ppid
         return parent > 0 ? parent : nil
+    }
+
+    /// argv of `pid`, or nil if it cannot be read. Used to see launch flags
+    /// (`--dangerously-skip-permissions`) that never land in settings.json.
+    public static func commandLine(of pid: pid_t) -> [String]? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else {
+            return nil
+        }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else {
+            return nil
+        }
+        let argc = buffer.prefix(MemoryLayout<Int32>.size).withUnsafeBytes {
+            Int($0.load(as: Int32.self))
+        }
+        guard argc > 0, argc < 4096 else { return nil }
+        var index = MemoryLayout<Int32>.size
+        // Skip the exec path and the padding NULLs that follow it.
+        while index < size, buffer[index] != 0 { index += 1 }
+        while index < size, buffer[index] == 0 { index += 1 }
+        var arguments: [String] = []
+        arguments.reserveCapacity(argc)
+        for _ in 0..<argc {
+            guard index < size else { break }
+            let start = index
+            while index < size, buffer[index] != 0 { index += 1 }
+            if start < index {
+                arguments.append(String(decoding: buffer[start..<index], as: UTF8.self))
+            }
+            index += 1
+        }
+        return arguments.isEmpty ? nil : arguments
     }
 
     public static func processName(of pid: pid_t) -> String? {
