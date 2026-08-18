@@ -361,7 +361,7 @@ final class AgentHub: ObservableObject {
         // re-read every sidecar still missing — N events across M children
         // became N×M concurrent reads of files that were not there yet.
         if envelope.event.backgroundTasks != nil {
-            resolveSubagentModels(sessionId: sessionId)
+            resolveSubagentMeta(sessionId: sessionId)
         }
         markPersistDirty()
 
@@ -403,35 +403,49 @@ final class AgentHub: ObservableObject {
         }
     }
 
-    /// A subagent's model ("fable") appears in no hook payload — only in the
-    /// sidecar Claude Code writes beside its transcript. Reading it is what
-    /// lets the row say "Fable" instead of "general-purpose", so it is pure
-    /// enrichment: a miss leaves the agent type showing and nothing else.
-    private func resolveSubagentModels(sessionId: String) {
+    /// Neither a subagent's model ("fable") nor its parent appears in any hook
+    /// payload — only in the sidecar Claude Code writes beside its transcript.
+    /// Reading it is what lets the row say "Fable" and indent under the agent
+    /// that spawned it, so it is pure enrichment: a miss leaves the agent type
+    /// showing at top level and nothing else.
+    ///
+    /// A sidecar that parsed is final — real ones often omit `model`, and a
+    /// root legitimately has no parent, so "field still nil" cannot mean "read
+    /// it again" or every Stop would rescan the directory. Only a file that
+    /// was not there yet (it appears at spawn; the list can announce the agent
+    /// first) stays unresolved and retries. The set is in-memory on purpose:
+    /// after a relaunch each sidecar is re-read once, which also backfills
+    /// snapshots persisted before a field existed.
+    private var resolvedSubagentSidecars: Set<String> = []
+
+    private func resolveSubagentMeta(sessionId: String) {
         guard let session = store.sessions[sessionId],
               let transcriptPath = session.transcriptPath
         else { return }
-        let unresolved = session.backgroundTasks.filter { $0.isSubagent && $0.model == nil }
+        let unresolved = session.backgroundTasks.filter {
+            $0.isSubagent && !resolvedSubagentSidecars.contains($0.id)
+        }
         guard !unresolved.isEmpty else { return }
         Task.detached(priority: .utility) {
-            var resolved: [(id: String, model: String)] = []
+            var resolved: [(id: String, meta: SubagentMeta)] = []
             for task in unresolved {
                 guard let path = RockyCore.BackgroundTask.metaPath(
                           transcriptPath: transcriptPath,
                           agentId: task.id
                       ),
                       let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-                      let meta = SubagentMeta(data),
-                      let model = meta.model, !model.isEmpty
+                      let meta = SubagentMeta(data)
                 else { continue }
-                resolved.append((task.id, model))
+                resolved.append((task.id, meta))
             }
-            let models = resolved
-            guard !models.isEmpty else { return }
+            let sidecars = resolved
+            guard !sidecars.isEmpty else { return }
             await MainActor.run { [weak self] in
-                for entry in models {
-                    self?.store.setSubagentModel(
-                        entry.model,
+                for entry in sidecars {
+                    self?.resolvedSubagentSidecars.insert(entry.id)
+                    self?.store.applySubagentMeta(
+                        model: entry.meta.model,
+                        parentAgentId: entry.meta.parentAgentId,
                         agentId: entry.id,
                         sessionId: sessionId
                     )

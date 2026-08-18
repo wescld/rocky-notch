@@ -1285,19 +1285,18 @@ struct DelegatedRows: View {
 
     var body: some View {
         let cap = expanded ? NotchView.maxExpandedBackgroundRows : NotchView.maxBackgroundRows
-        let drawn = Array(session.backgroundTasks.prefix(cap))
-        let grouped = Array(session.backgroundTasks.dropFirst(drawn.count))
+        let display = RockyCore.BackgroundTask.displayRows(session.backgroundTasks, cap: cap)
         // Open with nothing left over, the line has no count to carry — but it
         // is still the only way back, so it stays as long as there is anything
         // the resting cap would have hidden. A fan-out that finished down to
         // four rows drops it: there is no longer a group to collapse.
         let collapsible = expanded && session.backgroundTasks.count > NotchView.maxBackgroundRows
-        ForEach(drawn) { task in
-            BackgroundTaskRow(task: task)
+        ForEach(display.rows) { row in
+            BackgroundTaskRow(task: row.task, depth: row.depth)
         }
-        if !grouped.isEmpty || collapsible {
+        if !display.overflow.isEmpty || collapsible {
             BackgroundTaskOverflowRow(
-                tasks: grouped,
+                tasks: display.overflow,
                 expanded: expanded,
                 onToggle: onToggleExpand
             )
@@ -1311,6 +1310,10 @@ struct DelegatedRows: View {
 struct BackgroundTaskRow: View {
     // Qualified: SwiftUI ships a `BackgroundTask` of its own.
     let task: RockyCore.BackgroundTask
+    /// Visible-ancestry depth from `BackgroundTask.displayRows`. The indent
+    /// stops growing past two extra levels: deeper nesting still draws in
+    /// tree order, but the notch is too narrow to spend width proving it.
+    var depth = 0
 
     var body: some View {
         HStack(spacing: 7) {
@@ -1340,7 +1343,7 @@ struct BackgroundTaskRow: View {
             }
             Spacer(minLength: 4)
         }
-        .padding(.leading, 28)
+        .padding(.leading, 28 + CGFloat(min(depth, 2)) * 14)
         .padding(.trailing, 10)
         .frame(height: NotchView.backgroundRowHeight)
     }

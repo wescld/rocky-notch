@@ -275,7 +275,7 @@ final class SessionDelegationTests: XCTestCase {
         var store = SessionStore()
         store.apply(envelope("SessionStart"), at: t0)
         store.apply(envelope("Stop", backgroundTasks: [subagent, shell]), at: t0 + 10)
-        store.setSubagentModel("fable", agentId: "ag1", sessionId: "s1")
+        store.applySubagentMeta(model: "fable", parentAgentId: nil, agentId: "ag1", sessionId: "s1")
         store.apply(
             envelope("PostToolUse", requestId: "r2", toolName: "Read", agentId: "ag1"),
             at: t0 + 15
@@ -290,6 +290,69 @@ final class SessionDelegationTests: XCTestCase {
         )
         XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.first?.model, "fable")
         XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.first?.lastAction, action)
+    }
+
+    /// The tree is only as durable as this carry: helper SubagentStops
+    /// reannounce the list every ~30s, and each one replaces it wholesale.
+    func testRefreshKeepsTheResolvedParent() {
+        let nested = BackgroundTask(
+            id: "ag2", kind: "subagent", status: "running",
+            description: "Inventory tests", agentType: "Explore"
+        )
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop", backgroundTasks: [subagent, nested]), at: t0 + 10)
+        store.applySubagentMeta(model: nil, parentAgentId: "ag1", agentId: "ag2", sessionId: "s1")
+
+        store.apply(
+            envelope("SubagentStop", agentId: "helper", backgroundTasks: [subagent, nested]),
+            at: t0 + 40
+        )
+        XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.last?.parentAgentId, "ag1")
+    }
+
+    /// If a CLI ever reports ancestry in the payload itself, it outranks
+    /// whatever an earlier sidecar said.
+    func testReportedParentOutranksTheCarriedOne() {
+        let nested = BackgroundTask(
+            id: "ag2", kind: "subagent", status: "running",
+            description: "Inventory tests", agentType: "Explore"
+        )
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop", backgroundTasks: [subagent, nested]), at: t0 + 10)
+        store.applySubagentMeta(model: nil, parentAgentId: "ag1", agentId: "ag2", sessionId: "s1")
+
+        var reported = nested
+        reported.parentAgentId = "sh1"
+        store.apply(
+            envelope("SubagentStop", agentId: "helper", backgroundTasks: [subagent, reported]),
+            at: t0 + 40
+        )
+        XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.last?.parentAgentId, "sh1")
+    }
+
+    /// The sidecar read is asynchronous, so its result can land after the task
+    /// finished — or carry garbage. Neither may touch the list: a removed id
+    /// must not resurrect, a shell must not grow an edge, an empty parent is
+    /// no parent, and a nil model must not erase a resolved one.
+    func testApplySubagentMetaIsDefensive() {
+        var store = SessionStore()
+        store.apply(envelope("SessionStart"), at: t0)
+        store.apply(envelope("Stop", backgroundTasks: [subagent, shell]), at: t0 + 10)
+
+        store.applySubagentMeta(model: "fable", parentAgentId: nil, agentId: "ag1", sessionId: "s1")
+        store.applySubagentMeta(model: nil, parentAgentId: "", agentId: "ag1", sessionId: "s1")
+        XCTAssertEqual(store.sessions["s1"]?.backgroundTasks.first?.model, "fable")
+        XCTAssertNil(store.sessions["s1"]?.backgroundTasks.first?.parentAgentId)
+
+        store.applySubagentMeta(model: "fable", parentAgentId: "ag1", agentId: "sh1", sessionId: "s1")
+        XCTAssertNil(store.sessions["s1"]?.backgroundTasks.last?.model)
+        XCTAssertNil(store.sessions["s1"]?.backgroundTasks.last?.parentAgentId)
+
+        let before = store.sessions["s1"]?.backgroundTasks
+        store.applySubagentMeta(model: "fable", parentAgentId: "ag1", agentId: "gone", sessionId: "s1")
+        XCTAssertEqual(store.sessions["s1"]?.backgroundTasks, before)
     }
 
     // MARK: - Retention

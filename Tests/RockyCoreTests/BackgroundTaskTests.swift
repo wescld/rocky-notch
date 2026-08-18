@@ -310,4 +310,160 @@ final class BackgroundTaskTests: XCTestCase {
         XCTAssertNil(SubagentMeta(Data(#"{"unrelated":true}"#.utf8)))
         XCTAssertNil(SubagentMeta(Data("not json".utf8)))
     }
+
+    /// Verbatim from a real nested spawn: a kai-implementer's Explore child.
+    /// `spawnDepth` is deliberately ignored — display depth must come from
+    /// ancestors actually visible in the list.
+    func testSubagentMetaParsesTheParent() throws {
+        let data = Data("""
+        {"agentType":"Explore","description":"Inventory tests pinning C2 fills",
+         "toolUseId":"toolu_01","parentAgentId":"af0b973f54c2ba433","spawnDepth":2}
+        """.utf8)
+        let meta = try XCTUnwrap(SubagentMeta(data))
+        XCTAssertEqual(meta.parentAgentId, "af0b973f54c2ba433")
+        XCTAssertNil(meta.model)
+    }
+
+    func testSubagentMetaTreatsAnEmptyParentAsNone() throws {
+        let meta = try XCTUnwrap(SubagentMeta(Data(
+            #"{"agentType":"Explore","parentAgentId":""}"#.utf8
+        )))
+        XCTAssertNil(meta.parentAgentId)
+    }
+
+    // MARK: - The display forest
+
+    func sub(_ id: String, parent: String? = nil) -> BackgroundTask {
+        BackgroundTask(
+            id: id, kind: "subagent", status: "running",
+            description: "task \(id)", agentType: "general-purpose",
+            parentAgentId: parent
+        )
+    }
+
+    func rows(_ tasks: [BackgroundTask], cap: Int = 12) -> [(String, Int)] {
+        BackgroundTask.displayRows(tasks, cap: cap).rows.map { ($0.id, $0.depth) }
+    }
+
+    func testFlatListStaysFlatInPayloadOrder() {
+        let tasks = [sub("a"), sub("b"), sub("c")]
+        XCTAssertEqual(rows(tasks).map(\.0), ["a", "b", "c"])
+        XCTAssertEqual(rows(tasks).map(\.1), [0, 0, 0])
+        XCTAssertEqual(BackgroundTask.displayRows(tasks, cap: 2).overflow.map(\.id), ["c"])
+    }
+
+    func testChildrenIndentUnderTheirParentInForestOrder() {
+        let drawn = rows([sub("a"), sub("b"), sub("x", parent: "a"), sub("y", parent: "x")])
+        XCTAssertEqual(drawn.map(\.0), ["a", "x", "y", "b"])
+        XCTAssertEqual(drawn.map(\.1), [0, 1, 2, 0])
+    }
+
+    /// A parent that finished is not an error state: its children are the work
+    /// now. No badge, no indent, no memory of the old shape.
+    func testOrphanPromotesToTopLevel() {
+        let drawn = rows([sub("a"), sub("x", parent: "gone")])
+        XCTAssertEqual(drawn.map(\.0), ["a", "x"])
+        XCTAssertEqual(drawn.map(\.1), [0, 0])
+    }
+
+    /// The grandchild's sidecar said depth 2; with the middle parent out of
+    /// the list it still draws at top level, proving depth comes from visible
+    /// ancestry and never from `spawnDepth`.
+    func testMissingMiddleParentPromotesTheGrandchild() {
+        let drawn = rows([sub("a"), sub("y", parent: "x")])
+        XCTAssertEqual(drawn.map(\.1), [0, 0])
+    }
+
+    /// An id collision with a shell must not fabricate an edge — in either
+    /// direction, whatever garbage ends up in the field.
+    func testShellsNeverJoinTheTree() {
+        let shell = BackgroundTask(
+            id: "sh", kind: "shell", command: "npm test", parentAgentId: "a"
+        )
+        let drawn = rows([sub("a"), shell, sub("x", parent: "sh")])
+        XCTAssertEqual(drawn.map(\.1), [0, 0, 0])
+    }
+
+    /// Malformed ancestry degrades to the flat list: every id exactly once,
+    /// never a loop, never a hidden row.
+    func testCyclesAndSelfParentsDrawEveryIdExactlyOnce() {
+        let tasks = [
+            sub("a", parent: "a"),
+            sub("b", parent: "c"),
+            sub("c", parent: "b"),
+            sub("d", parent: "b"),
+        ]
+        let display = BackgroundTask.displayRows(tasks, cap: 12)
+        XCTAssertEqual(display.rows.map(\.id).sorted(), ["a", "b", "c", "d"])
+        XCTAssertEqual(display.overflow, [])
+        // The self-parent is a root; the cycle promotes at its first member,
+        // which keeps the other one (and the innocent bystander) attached.
+        XCTAssertEqual(display.rows.map(\.depth), [0, 0, 1, 1])
+    }
+
+    /// The resting cap shows what was dispatched. One fan-out must not bury
+    /// the other roots under its own children.
+    func testRootsAreNeverBuriedByAnotherRootsChildren() {
+        let tasks = [
+            sub("a"), sub("x", parent: "a"), sub("y", parent: "a"),
+            sub("b"), sub("c"), sub("d"),
+        ]
+        let display = BackgroundTask.displayRows(tasks, cap: 4)
+        XCTAssertEqual(display.rows.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(display.overflow.map(\.id), ["x", "y"])
+    }
+
+    func testLeftoverSlotsGoToChildrenInForestOrder() {
+        let tasks = [
+            sub("a"), sub("b"),
+            sub("x", parent: "a"), sub("y", parent: "a"), sub("z", parent: "b"),
+        ]
+        let display = BackgroundTask.displayRows(tasks, cap: 4)
+        XCTAssertEqual(display.rows.map(\.id), ["a", "x", "y", "b"])
+        XCTAssertEqual(display.rows.map(\.depth), [0, 1, 1, 0])
+        XCTAssertEqual(display.overflow.map(\.id), ["z"])
+    }
+
+    /// A child whose parent fell past the cap goes to the overflow with it —
+    /// grouped, never dropped, and never drawn indented under nothing.
+    func testChildOfAnUndrawnParentStaysInOverflow() {
+        let tasks = [
+            sub("a"), sub("b"), sub("c"), sub("d"), sub("e"),
+            sub("x", parent: "e"),
+        ]
+        let display = BackgroundTask.displayRows(tasks, cap: 4)
+        XCTAssertEqual(display.rows.map(\.id), ["a", "b", "c", "d"])
+        XCTAssertEqual(display.overflow.map(\.id), ["e", "x"])
+    }
+
+    /// The snapshot must bring the tree back after a relaunch, and snapshots
+    /// written before the field existed must still decode.
+    func testParentSurvivesTheCodableRoundTripAndOldSnapshotsDecode() throws {
+        let task = sub("x", parent: "a")
+        let decoded = try JSONDecoder().decode(
+            BackgroundTask.self,
+            from: JSONEncoder().encode(task)
+        )
+        XCTAssertEqual(decoded.parentAgentId, "a")
+
+        let old = try JSONDecoder().decode(BackgroundTask.self, from: Data(
+            #"{"id":"x","type":"subagent","status":"running"}"#.utf8
+        ))
+        XCTAssertNil(old.parentAgentId)
+    }
+
+    /// No CLI reports ancestry in the payload today, but the decoder accepts
+    /// it so the day one starts, the payload simply outranks the sidecar.
+    func testPayloadParentIsDecodedAndEmptyMeansNone() throws {
+        let event = try decode("""
+        {"hook_event_name": "Stop", "session_id": "s1", "background_tasks": [
+          {"id": "a", "type": "subagent"},
+          {"id": "x", "type": "subagent", "parent_agent_id": "a"},
+          {"id": "y", "type": "subagent", "parent_agent_id": ""}
+        ]}
+        """)
+        let tasks = try XCTUnwrap(event.backgroundTasks)
+        XCTAssertEqual(tasks[1].parentAgentId, "a")
+        XCTAssertNil(tasks[2].parentAgentId)
+    }
 }

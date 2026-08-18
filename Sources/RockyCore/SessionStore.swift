@@ -397,17 +397,31 @@ public struct SessionStore: Equatable, Sendable {
         sessions[sessionId]?.tokens += tokens
     }
 
-    /// The model behind a subagent, resolved from its on-disk sidecar. Purely a
-    /// label ("Fable" instead of "general-purpose"); no state depends on it.
-    public mutating func setSubagentModel(
-        _ model: String,
+    /// What a subagent's on-disk sidecar said about it: the model behind it
+    /// ("Fable" instead of "general-purpose") and, for a nested agent, who
+    /// spawned it. One setter for both, because the sidecar is one read and
+    /// two MainActor writes would draw the chip and then move the row.
+    ///
+    /// Purely labels — no state depends on either. The read is asynchronous,
+    /// so the task may be gone by the time its result lands: applying by id
+    /// into whatever the list is *now* makes a stale result a no-op instead
+    /// of a resurrection. Nil fields leave earlier values alone (real
+    /// sidecars often carry no model at all).
+    public mutating func applySubagentMeta(
+        model: String?,
+        parentAgentId: String?,
         agentId: String,
         sessionId: String
     ) {
         guard let index = sessions[sessionId]?.backgroundTasks
-            .firstIndex(where: { $0.id == agentId })
+            .firstIndex(where: { $0.id == agentId && $0.isSubagent })
         else { return }
-        sessions[sessionId]?.backgroundTasks[index].model = model
+        if let model, !model.isEmpty {
+            sessions[sessionId]?.backgroundTasks[index].model = model
+        }
+        if let parent = BackgroundTask.normalizedParent(parentAgentId) {
+            sessions[sessionId]?.backgroundTasks[index].parentAgentId = parent
+        }
     }
 
     /// A subagent ran a tool. Deliberately outside the state machine: it
@@ -449,6 +463,10 @@ public struct SessionStore: Equatable, Sendable {
             var merged = task
             merged.lastAction = task.lastAction ?? old.lastAction
             merged.model = task.model ?? old.model
+            // Without this carry the tree flattens on every reannounce —
+            // helper SubagentStops fire every ~30s. Payload wins if a CLI
+            // ever starts reporting ancestry itself.
+            merged.parentAgentId = task.parentAgentId ?? old.parentAgentId
             return merged
         }
     }
