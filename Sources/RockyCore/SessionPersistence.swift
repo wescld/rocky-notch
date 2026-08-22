@@ -88,8 +88,12 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         if session.status == .waitingPermission || session.status == .running {
             session.status = .idle
         }
-        if session.status == .delegating, session.backgroundTasks.isEmpty {
-            session.status = .idle
+        // Both directions: a delegating snapshot whose list drained is idle,
+        // and a snapshot that still has a list is delegating even when it was
+        // taken mid-turn (`.running` with minted rows) — restoring that as
+        // idle would draw "done · click to jump" over agents still working.
+        if session.status == .idle || session.status == .delegating {
+            session.status = session.backgroundTasks.isEmpty ? .idle : .delegating
         }
         // Touch so prune doesn't instantly drop very old snapshots that
         // still have live PIDs (caller reconciles).

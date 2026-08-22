@@ -322,7 +322,15 @@ public struct BackgroundTask: Identifiable, Equatable, Sendable, Codable {
     /// `<transcript without .jsonl>/subagents/agent-<agentId>.meta.json`.
     /// It is the only place the subagent's model appears.
     public static func metaPath(transcriptPath: String, agentId: String) -> String? {
-        guard !agentId.isEmpty else { return nil }
+        // The id names a file inside `subagents/`; one carrying a separator
+        // or a dot-segment would resolve outside it. Ids come from hook
+        // payloads, so this is hardening against a malformed sender, not a
+        // path Claude ever produces.
+        guard !agentId.isEmpty,
+              !agentId.contains("/"),
+              !agentId.contains("\\"),
+              agentId != ".", agentId != ".."
+        else { return nil }
         let base = (transcriptPath as NSString).deletingPathExtension
         guard !base.isEmpty else { return nil }
         return (base as NSString)

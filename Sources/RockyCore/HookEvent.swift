@@ -9,6 +9,12 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case sessionStart
         case sessionEnd
         case stop
+        /// A subagent was spawned. The one signal that exists *while* the work
+        /// runs: `background_tasks` only arrives when something stops, so a
+        /// spawn mid-turn would otherwise stay invisible until the first
+        /// `Stop`/`SubagentStop`. Carries `agent_id` and `agent_type`, never a
+        /// description — that lives in the on-disk sidecar.
+        case subagentStart
         /// A subagent finished. Only interesting for the `background_tasks` it
         /// carries: it is the one event that reports what is still in flight
         /// while the parent session sits parked.
@@ -24,6 +30,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "SessionStart": self = .sessionStart
             case "SessionEnd": self = .sessionEnd
             case "Stop": self = .stop
+            case "SubagentStart": self = .subagentStart
             case "SubagentStop": self = .subagentStop
             case "Notification": self = .notification
             // Grok/Cursor have no PermissionRequest; PreToolUse and Cursor's
@@ -57,6 +64,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
             case "sessionstart": return "SessionStart"
             case "sessionend": return "SessionEnd"
             case "stop", "stopfailure": return "Stop"
+            case "subagentstart": return "SubagentStart"
             case "subagentstop": return "SubagentStop"
             case "notification": return "Notification"
             case "permissionrequest": return "PermissionRequest"
