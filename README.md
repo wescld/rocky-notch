@@ -58,7 +58,9 @@ prompt appears. Rocky can never block your work.
 
 - Live session monitor around the notch: who's running, who needs you
 - One-click Approve / Deny / "answer in terminal" for permission requests
-- Diff preview for file edits, command preview for shell
+- Diff preview for file edits, command preview and advisory risk warnings for shell
+- Automatic alerts when a competing GitKraken permission broker appears or returns
+- Reduce Motion support for Rocky's animated sprites
 - What each agent is doing right now, streamed from the transcript
 - Token usage and working time per session
 - Rocky speaks in soft musical chimes when something needs you
@@ -138,7 +140,7 @@ Agy session after installing.
 
 ```sh
 make test               # unit tests (RockyCore)
-Tests/integration.sh    # end-to-end harness: real hook against the real app
+Tests/integration.sh    # end-to-end harness: isolated test app and temporary socket
 make app                # build dist/Rocky.app (ad-hoc signed, embeds Sparkle)
 ```
 
@@ -148,6 +150,32 @@ make app                # build dist/Rocky.app (ad-hoc signed, embeds Sparkle)
   Aggressive deadlines, fail-open everywhere.
 - `Sources/RockyApp` - the app: IPC server, session hub, notch UI,
   agent integrations, Sparkle update checks.
+
+Claude headless tool permissions (`sdk-cli` / `sdk-py`) pass back to the runner
+without contacting Rocky; this is not a deny. Interactive, unknown, and `sdk-ts`
+entrypoints keep approval cards, and `AskUserQuestion` is always forwarded.
+Opt in to headless cards with `ROCKY_HOOK_HEADLESS_PERMISSIONS=gate` in the hook's
+environment, or `--headless-permissions gate` on its command.
+
+The integration harness uses `--rocky-integration-test` and `ROCKY_SOCKET_PATH`
+so it does not heal installed hooks, persist sessions, modify preferences, or
+stop the owner's running app. Release builds ignore `ROCKY_SOCKET_PATH` unless
+that explicit launch flag is present on each peer, including the hook; normal
+installed hook commands never include it. Release builds also ignore
+`ROCKY_AUTODECIDE` without the flag. Do not use the test auto-decider in normal
+sessions. Claude's observational `StopFailure` hook is installed only when the
+CLI's version metadata identifies version 2.1.78 or newer; unknown layouts keep
+the older event set rather than risk invalidating older Claude settings.
+
+GitKraken broker monitoring is read-only: Settings lists the affected agent and
+file/plugin, and Rocky reveals a single non-modal notice in the notch or menu-bar
+panel once per appearance (including reinstallation), without taking focus.
+Disappearance requires a follow-up scan to avoid repeat alerts during rewrites.
+It watches config directories with a debounced check and a 30-second/application-
+activation fallback. Disable unwanted integrations in GitKraken's External Tools
+preferences or with `gk ai hook uninstall <agent>`, then restart the agent.
+Rocky never removes foreign hooks automatically. Observational hooks without
+`--blocking` are not treated as competing permission brokers.
 
 ## License
 

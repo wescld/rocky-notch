@@ -44,7 +44,7 @@ public enum AgySettingsMerger {
         event: String,
         commandArguments: String = commandArguments
     ) -> String {
-        var command = shellQuote(hookBinaryPath)
+        var command = ShellCommand.quote(hookBinaryPath)
         if !commandArguments.isEmpty {
             command += " " + commandArguments
         }
@@ -75,8 +75,9 @@ public enum AgySettingsMerger {
                 "timeout": needsReply ? permissionTimeout : 10,
             ]
             if grouped {
-                var entries = (group[event] as? [[String: Any]]) ?? []
-                entries.removeAll(where: isOurGroup)
+                var entries = ClaudeSettingsMerger.removingRockyHandlers(
+                    from: (group[event] as? [[String: Any]]) ?? []
+                )
                 entries.append([
                     "matcher": "*",
                     "hooks": [handler],
@@ -96,9 +97,16 @@ public enum AgySettingsMerger {
 
     public static func unmerge(settings data: Data?) throws -> Data {
         var root = try parse(data)
-        // Only the group we own. Other named hooks are the user's, even if a
-        // command string happens to mention rocky-hook.
-        root[hookName] = nil
+        // Other named hooks are the user's. Inside our namespace, preserve
+        // foreign handlers too, including any matcher/group attributes.
+        if var group = root[hookName] as? [String: Any] {
+            for (event, value) in group {
+                guard let entries = value as? [[String: Any]] else { continue }
+                let remaining = ClaudeSettingsMerger.removingRockyHandlers(from: entries)
+                group[event] = remaining.isEmpty ? nil : remaining
+            }
+            root[hookName] = group.keys.allSatisfy { $0 == "enabled" } ? nil : group
+        }
         return try serialize(root)
     }
 
@@ -123,11 +131,11 @@ public enum AgySettingsMerger {
             if grouped {
                 found = entries.contains { entry in
                     (entry["hooks"] as? [[String: Any]])?.contains {
-                        ($0["command"] as? String) == expected
+                        ShellCommand.matches($0["command"] as? String, expected: expected)
                     } == true
                 }
             } else {
-                found = entries.contains { ($0["command"] as? String) == expected }
+                found = entries.contains { ShellCommand.matches($0["command"] as? String, expected: expected) }
             }
             if !found { return false }
         }
@@ -184,7 +192,4 @@ public enum AgySettingsMerger {
         )
     }
 
-    private static func shellQuote(_ path: String) -> String {
-        path.contains(" ") ? "\"\(path)\"" : path
-    }
 }

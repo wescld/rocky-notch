@@ -8,6 +8,9 @@ import RockyCore
 final class AgentHub: ObservableObject {
     @Published private(set) var store = SessionStore()
     @Published private(set) var serverError: String?
+    @Published var competingBrokers: [PermissionBrokerFinding] = []
+    /// One non-modal notice, combining all unacknowledged appearances.
+    @Published var brokerAlert: [PermissionBrokerFinding] = []
     /// Sessions that just finished a turn; Rocky celebrates them briefly.
     @Published private(set) var celebrating: Set<String> = []
     /// Claude account rate limits (from statusLine cache), polled lightly.
@@ -19,6 +22,13 @@ final class AgentHub: ObservableObject {
     /// exits cleanly (passthrough) instead of being killed.
     static let hookTimeout: TimeInterval = 60
     var decisionTimeout: TimeInterval { Self.hookTimeout - 5 }
+
+    var onBrokerAlertDismissed: (([PermissionBrokerFinding]) -> Void)?
+
+    func dismissBrokerAlert() {
+        onBrokerAlertDismissed?(brokerAlert)
+        brokerAlert = []
+    }
 
     var onPermissionRequest: ((AgentSession) -> Void)?
     var onSessionIdle: ((AgentSession) -> Void)?
@@ -58,6 +68,11 @@ final class AgentHub: ObservableObject {
     }
 
     func start() {
+        if IntegrationTestLaunch.isActive(arguments: CommandLine.arguments) {
+            do { try server.start() }
+            catch { serverError = "failed to start test IPC" }
+            return
+        }
         restoreSessionsFromDisk()
         // Agent-written JSONL (Claude/Codex/Agy) — observational rows only; does
         // not invent permissions. I/O is off the main thread so launch stays
@@ -227,6 +242,7 @@ final class AgentHub: ObservableObject {
     }
 
     private func markPersistDirty() {
+        guard !IntegrationTestLaunch.isActive(arguments: CommandLine.arguments) else { return }
         persistDirty = true
     }
 
@@ -272,8 +288,10 @@ final class AgentHub: ObservableObject {
     }
 
     func stop() {
-        flushPersistenceIfNeeded()
-        try? SessionPersistence.save(store.ordered)
+        if !IntegrationTestLaunch.isActive(arguments: CommandLine.arguments) {
+            flushPersistenceIfNeeded()
+            try? SessionPersistence.save(store.ordered)
+        }
         server.stop()
         transcripts.stopAll()
         pruneTimer?.invalidate()
@@ -390,7 +408,7 @@ final class AgentHub: ObservableObject {
             // finished turn is "done" — chiming completion at someone whose
             // answer is still pending, or whose agents are still running,
             // would be a lie.
-            if let session, session.status == .idle {
+            if let session, session.completedSuccessfully {
                 onSessionIdle?(session)
                 onSessionCompleted?(session)
                 celebrate(sessionId: session.id)
@@ -399,7 +417,7 @@ final class AgentHub: ObservableObject {
             // A turn that parked is only over when its last child comes back.
             // That is the completion the user has been waiting for, so it gets
             // the announcement the premature Stop did not.
-            if let session, session.status == .idle, statusBefore == .delegating {
+            if let session, session.completedSuccessfully, statusBefore == .delegating {
                 onSessionIdle?(session)
                 onSessionCompleted?(session)
                 celebrate(sessionId: session.id)

@@ -113,6 +113,9 @@ public struct HookEvent: Codable, Equatable, Sendable {
     /// mean different things: empty says the agent reported nothing pending,
     /// nil says the agent never told us (older CLI, other provider).
     public let backgroundTasks: [BackgroundTask]?
+    /// Carried separately from the canonical name for old IPC peers.
+    public let outcome: TurnOutcome
+    public let fullyIdle: Bool?
 
     public var kind: Kind { Kind(name: hookEventName) }
 
@@ -162,6 +165,7 @@ public struct HookEvent: Codable, Equatable, Sendable {
         case agentTypeCamel = "agentType"
         case backgroundTasks = "background_tasks"
         case backgroundTasksCamel = "backgroundTasks"
+        case outcome = "rocky_outcome"
     }
 
     public init(from decoder: Decoder) throws {
@@ -173,6 +177,17 @@ public struct HookEvent: Codable, Equatable, Sendable {
             ?? Self.inferEventName(from: c)
             ?? "Unknown"
         hookEventName = Kind.canonical(rawEventName)
+        fullyIdle = try? c.decodeIfPresent(Bool.self, forKey: .fullyIdle)
+        if let rawOutcome = try? c.decodeIfPresent(String.self, forKey: .outcome) {
+            // Future outcome values must not be mistaken for success.
+            outcome = TurnOutcome(rawValue: rawOutcome) ?? .none
+        } else {
+            outcome = TurnOutcome.normalized(
+                eventName: rawEventName,
+                terminationReason: try? Self.decodeOptionalString(c, .terminationReason),
+                fullyIdle: fullyIdle
+            )
+        }
         var resolvedCwd = try Self.decodeOptionalString(c, .cwd)
             ?? Self.decodeOptionalString(c, .workspaceRoot)
             ?? Self.decodeOptionalString(c, .workspace_root)
@@ -254,6 +269,8 @@ public struct HookEvent: Codable, Equatable, Sendable {
         // Re-encoded in Rocky's own shape rather than the payload's: this hop
         // is hook → app, and `BackgroundTask` decodes both.
         try c.encodeIfPresent(backgroundTasks, forKey: .backgroundTasks)
+        try c.encode(outcome, forKey: .outcome)
+        try c.encodeIfPresent(fullyIdle, forKey: .fullyIdle)
     }
 
     public init(
@@ -273,7 +290,9 @@ public struct HookEvent: Codable, Equatable, Sendable {
         prompt: String? = nil,
         agentId: String? = nil,
         agentType: String? = nil,
-        backgroundTasks: [BackgroundTask]? = nil
+        backgroundTasks: [BackgroundTask]? = nil,
+        outcome: TurnOutcome? = nil,
+        fullyIdle: Bool? = nil
     ) {
         self.sessionId = sessionId
         self.hookEventName = Kind.canonical(hookEventName)
@@ -292,6 +311,10 @@ public struct HookEvent: Codable, Equatable, Sendable {
         self.agentId = agentId
         self.agentType = agentType
         self.backgroundTasks = backgroundTasks
+        self.fullyIdle = fullyIdle
+        self.outcome = outcome ?? TurnOutcome.normalized(
+            eventName: hookEventName, terminationReason: nil, fullyIdle: fullyIdle
+        )
     }
 
     /// Copy carrying the agent's closing words. Used when they have to be
@@ -314,7 +337,9 @@ public struct HookEvent: Codable, Equatable, Sendable {
             prompt: prompt,
             agentId: agentId,
             agentType: agentType,
-            backgroundTasks: backgroundTasks
+            backgroundTasks: backgroundTasks,
+            outcome: outcome,
+            fullyIdle: fullyIdle
         )
     }
 

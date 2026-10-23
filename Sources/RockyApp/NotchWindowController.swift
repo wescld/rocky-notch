@@ -106,7 +106,7 @@ final class NotchWindowController {
     /// notch on the way to the menu bar should not fling the console open.
     private static let hoverIntent: TimeInterval = 0.12
 
-    init(hub: AgentHub) {
+    init(hub: AgentHub, onOpenSettings: @escaping () -> Void = {}) {
         self.hub = hub
 
         let panel = NSPanel(
@@ -134,7 +134,8 @@ final class NotchWindowController {
             // metrics already supplies a synthetic height for notchless
             // displays (the floating pill). Zeroing it left a 5pt-tall bar.
             notchHeight: m.notchHeight,
-            maxContentHeight: Self.contentHeightCeiling(for: screen, metrics: m)
+            maxContentHeight: Self.contentHeightCeiling(for: screen, metrics: m),
+            onOpenSettings: onOpenSettings
         )
         let hosting = NSHostingView(rootView: root)
         self.hosting = hosting
@@ -157,9 +158,9 @@ final class NotchWindowController {
         // Layout outside the current update transaction; never mutate
         // published state from inside this sink (reentrancy crash).
         observation = state.$wantsExpanded
-            .combineLatest(state.$hovering, hub.$store)
+            .combineLatest(state.$hovering, hub.$store, hub.$brokerAlert)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _, _, _ in
+            .sink { [weak self] _, _, _, _ in
                 DispatchQueue.main.async { self?.syncAndLayout() }
             }
 
@@ -217,7 +218,7 @@ final class NotchWindowController {
             return false
         }()
 
-        if hasNewPending || hasUnseenPending || hoverConfirmed || holdingCompletion {
+        if hasNewPending || hasUnseenPending || hoverConfirmed || holdingCompletion || !hub.brokerAlert.isEmpty {
             revealedRequests.formUnion(pendingIds)
             collapseTimer?.invalidate()
             collapseTimer = nil
@@ -541,7 +542,7 @@ final class NotchWindowController {
     func revealCompletion(sessionId: String) {
         guard Preferences.showCompletionCards else { return }
         // Don't interrupt an open permission card.
-        if hub.sessions.contains(where: { $0.pending != nil }) { return }
+        if !hub.brokerAlert.isEmpty || hub.sessions.contains(where: { $0.pending != nil }) { return }
         state.attention = .completion(sessionId: sessionId)
         state.wantsExpanded = true
         completionDismissTimer?.invalidate()

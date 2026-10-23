@@ -45,10 +45,31 @@ var input = FileHandle.standardInput.readDataToEndOfFile()
 if let eventName = AgentIdentity.flagValue("--event", in: CommandLine.arguments) {
     input = HookEvent.applyingEventName(eventName, to: input)
 }
-guard let event = try? JSONDecoder().decode(HookEvent.self, from: input) else {
-    failOpen("decode: \(String(data: input.prefix(300), encoding: .utf8) ?? "binary")")
+let event: HookEvent
+do {
+    event = try JSONDecoder().decode(HookEvent.self, from: input)
+} catch {
+    failOpen(HookDiagnostics.decodeFailure(error, byteCount: input.count))
 }
-debugLog("event \(event.hookEventName) session=\(event.sessionId) agent=\(agent) tool=\(event.toolName ?? "-") subagent=\(event.agentId ?? "-")")
+debugLog(HookDiagnostics.eventSummary(event))
+
+// Passthrough is not a denial: the runner retains its own permission policy.
+if agent == "claude-code", event.kind == .permissionRequest {
+    let parentArguments = ProcessAncestry.agentAncestor(
+        of: ProcessInfo.processInfo.processIdentifier, agent: agent
+    ).flatMap { ProcessAncestry.commandLine(of: $0) }
+    if ClaudeHeadlessPolicy.passthroughSignal(
+        agent: agent,
+        eventKind: event.kind,
+        toolName: event.toolName,
+        hookArguments: CommandLine.arguments,
+        environment: ProcessInfo.processInfo.environment,
+        parentArguments: parentArguments
+    ) != nil {
+        debugLog("headless permission passthrough")
+        exit(0)
+    }
+}
 
 // Grok PreToolUse fires for every tool (even in always-approve). Skip the
 // Rocky gate for read-only tools and when Grok is already in YOLO /
@@ -60,9 +81,7 @@ if agent == "grok",
        toolName: event.toolName,
        permissionMode: event.permissionMode
    ) {
-    debugLog(
-        "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? "config")"
-    )
+    debugLog("auto-pass grok policy")
     exit(0)
 }
 
@@ -75,7 +94,7 @@ if agent == "cursor",
        toolName: event.toolName,
        hookEventName: event.hookEventName
    ) {
-    debugLog("auto-pass tool=\(event.toolName ?? "-") event=\(event.hookEventName)")
+    debugLog("auto-pass cursor policy")
     exit(0)
 }
 
@@ -86,7 +105,7 @@ if agent == "cursor",
   if agent == "kimi-code",
      event.kind == .permissionRequest,
      KimiToolPolicy.shouldAutoPass(toolName: event.toolName) {
-      debugLog("auto-pass tool=\(event.toolName ?? "-")")
+      debugLog("auto-pass kimi policy")
       exit(0)
   }
 
@@ -103,9 +122,7 @@ if agent == "cursor",
           toolName: event.toolName,
           permissionMode: event.permissionMode ?? launchMode
       ) {
-          debugLog(
-              "auto-pass tool=\(event.toolName ?? "-") mode=\(event.permissionMode ?? launchMode ?? "config")"
-          )
+          debugLog("auto-pass agy policy")
           exit(0)
       }
   }
@@ -116,9 +133,9 @@ if agent == "cursor",
   let hookPid = ProcessInfo.processInfo.processIdentifier
   let agentPid = ProcessAncestry.agentAncestor(of: hookPid, agent: agent)
   if let agentPid {
-      debugLog("agentPid=\(agentPid) for agent=\(agent)")
+      debugLog("agentPid=\(agentPid)")
   } else {
-      debugLog("agentPid unresolved for agent=\(agent)")
+      debugLog("agentPid unresolved")
   }
 
   // Terminal / pane hints for click-to-jump. Best-effort and fail-open —
@@ -133,13 +150,7 @@ if agent == "cursor",
       warpPaneResolver: { cwd in WarpSQLiteReader().lookupPaneUUID(forCwd: cwd) },
       ghosttySurfaceResolver: { TerminalProbe.queryGhosttyFocusedSurfaceID() }
   )
-  if let app = jump.terminalApp {
-      debugLog(
-          "jump app=\(app) tty=\(jump.terminalTTY ?? "-") "
-              + "session=\(jump.terminalSessionID ?? "-") "
-              + "warp=\(jump.warpPaneUUID ?? "-") tmux=\(jump.tmuxTarget ?? "-")"
-      )
-  }
+  debugLog("jump terminal-present=\(jump.terminalApp != nil)")
 
   // Kimi's Stop payload has no `last_assistant_message`, so the handoff — and
   // with it "the agent ended by asking you something" — would be invisible for
@@ -193,7 +204,7 @@ guard
 else {
     failOpen("invalid reply")
 }
-debugLog("decision \(reply.decision.rawValue) session=\(event.sessionId)")
+debugLog("decision \(reply.decision.rawValue)")
 guard let output = PermissionRequestOutput.stdout(
     for: reply.decision,
     agent: agent,

@@ -18,6 +18,7 @@ struct NotchView: View {
     /// update, and mutating an `@ObservableObject` from there is the reentrancy
     /// the controller's own subscription already goes out of its way to avoid.
     var onContentHeight: (CGFloat) -> Void = { _ in }
+    var onOpenSettings: () -> Void = {}
     /// Lets the session count travel between the resting and open cap layouts.
     @Namespace private var capNamespace
 
@@ -422,18 +423,23 @@ struct NotchView: View {
 
     private var expandedContent: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical) {
-                SessionListView(
-                    hub: hub,
-                    attention: state.attention,
-                    showsInsights: false,
-                    expandedRows: state.expandedRows,
-                    onToggleExpand: { state.toggleRow($0) },
-                    expandedDelegations: state.expandedDelegations,
-                    onToggleDelegation: { state.toggleDelegation($0) },
-                    onDismiss: { hub.dismiss(sessionId: $0) }
-                )
-                .padding(.horizontal, 18)
+            VStack(spacing: 0) {
+                // Stay visible while pending cards scroll independently below.
+                PermissionBrokerBanner(hub: hub, onOpenSettings: onOpenSettings)
+                    .padding(.horizontal, 18)
+                ScrollView(.vertical) {
+                    SessionListView(
+                        hub: hub,
+                        attention: state.attention,
+                        showsInsights: false,
+                        expandedRows: state.expandedRows,
+                        onToggleExpand: { state.toggleRow($0) },
+                        expandedDelegations: state.expandedDelegations,
+                        onToggleDelegation: { state.toggleDelegation($0) },
+                        onDismiss: { hub.dismiss(sessionId: $0) }
+                    )
+                    .padding(.horizontal, 18)
+                }
             }
             // Short lists keep their natural height; long lists stop at the
             // display ceiling and become scrollable instead of being clipped.
@@ -455,6 +461,49 @@ struct NotchView: View {
                     proxy.scrollTo(target.sessionId, anchor: .bottom)
                 }
             }
+        }
+    }
+}
+
+/// Shared, non-modal notice. A scan produces one surface, not one window per
+/// finding; the existing permission console remains usable underneath it.
+struct PermissionBrokerBanner: View {
+    @ObservedObject var hub: AgentHub
+    var onOpenSettings: () -> Void
+
+    var body: some View {
+        if !hub.brokerAlert.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Competing permission brokers detected", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.amber)
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(hub.brokerAlert, id: \.self) { finding in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("GitKraken · \(finding.agent) · \(finding.detail)")
+                                Text(finding.path)
+                                    .font(.system(size: 10, design: .monospaced))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(maxHeight: 80)
+                Text("Multiple brokers can leave approvals waiting. Disable the integration in GitKraken Preferences > External Tools, or run gk ai hook uninstall <agent> for each listed agent. Disable gitkraken-hooks@gitkraken in plugin settings if enabled, then restart the agent. Rocky never removes foreign hooks.")
+                HStack {
+                    Button("Open Settings", action: onOpenSettings)
+                    Spacer()
+                    Button("Dismiss") { hub.dismissBrokerAlert() }
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Palette.amber)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(Palette.inkSecondary)
+            .padding(10)
+            .background(Palette.amber.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.vertical, 8)
         }
     }
 }
@@ -798,13 +847,14 @@ struct PressableStyle: ButtonStyle {
 
 /// Makes any Rocky sprite poke-able: click → happy hop + trill.
 private struct PokeableModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var poked = false
 
     func body(content: Content) -> some View {
         content
-            .scaleEffect(poked ? 1.3 : 1)
-            .rotationEffect(.degrees(poked ? -8 : 0))
-            .animation(.spring(duration: 0.25, bounce: 0.65), value: poked)
+            .scaleEffect(poked && !reduceMotion ? 1.3 : 1)
+            .rotationEffect(.degrees(poked && !reduceMotion ? -8 : 0))
+            .animation(reduceMotion ? nil : .spring(duration: 0.25, bounce: 0.65), value: poked)
             .onTapGesture {
                 guard !poked else { return }
                 poked = true
@@ -826,6 +876,7 @@ extension View {
 /// alternates between thinking and snacking on a token crystal. Poking him
 /// startles him (one-shot reaction) into a sprint before settling down.
 struct BottomRocky: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let anyRunning: Bool
     @State private var reactUntil: Date?
     @State private var runBurstUntil: Date?
@@ -853,16 +904,16 @@ struct BottomRocky: View {
     ]
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { timeline in
-            let now = timeline.date
+        TimelineView(.animation(minimumInterval: 0.25, paused: reduceMotion)) { timeline in
+            let now = reduceMotion ? Date(timeIntervalSinceReferenceDate: 0) : timeline.date
             Group {
-                if let until = reactUntil, until > now {
+                if !reduceMotion, let until = reactUntil, until > now {
                     HStack {
                         Spacer()
                         RockyOneShot(prefix: "react", fallback: "rocky-alert", duration: Self.reactDuration, size: 26)
                         Spacer()
                     }
-                } else if let until = runBurstUntil, until > now {
+                } else if !reduceMotion, let until = runBurstUntil, until > now {
                     WalkingRocky(size: 24, speed: 110, fps: 14)
                 } else if anyRunning {
                     // Alternate moods every 9s: think, then snack. The musing
@@ -897,6 +948,7 @@ struct BottomRocky: View {
 
     private func startle() {
         RockyVoice.shared.poke()
+        guard !reduceMotion else { return }
         let now = Date()
         reactUntil = now.addingTimeInterval(Self.reactDuration)
         runBurstUntil = now.addingTimeInterval(Self.reactDuration + Self.sprintDuration)
@@ -905,6 +957,7 @@ struct BottomRocky: View {
 
 /// Plays an animation once (no loop), then holds the last frame.
 struct RockyOneShot: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let prefix: String
     let fallback: String
     let duration: Double
@@ -912,12 +965,12 @@ struct RockyOneShot: View {
     @State private var start = Date()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 16.0)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 16.0, paused: reduceMotion)) { timeline in
             let frames = RockyAnimatedSprite.loadFrames(prefix: prefix)
             if frames.isEmpty {
                 RockySprite(state: fallback, fallback: "south", size: size)
             } else {
-                let progress = min(1, timeline.date.timeIntervalSince(start) / duration)
+                let progress = reduceMotion ? 1 : min(1, timeline.date.timeIntervalSince(start) / duration)
                 let index = min(frames.count - 1, Int(progress * Double(frames.count)))
                 Image(nsImage: frames[index])
                     .interpolation(.none)
@@ -932,6 +985,7 @@ struct RockyOneShot: View {
 
 /// Rocky pacing back and forth under the session list, keeping watch.
 struct WalkingRocky: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var size: CGFloat = 22
     /// Points per second of patrol speed.
     var speed: Double = 26
@@ -950,11 +1004,11 @@ struct WalkingRocky: View {
     var body: some View {
         GeometryReader { geo in
             let track = max(1, geo.size.width - size)
-            TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / 12.0, paused: reduceMotion)) { timeline in
                 // Clock relative to appearance: Rocky always enters at the
                 // left edge walking right — no random mid-patrol jump (and no
                 // flicker) when the panel expands.
-                let t = max(0, timeline.date.timeIntervalSince(start))
+                let t = reduceMotion ? 0 : max(0, timeline.date.timeIntervalSince(start))
                 // Triangle wave 0→1→0 across the track.
                 let cycle = (t * speed).truncatingRemainder(dividingBy: track * 2)
                 let goingRight = cycle < track
@@ -1206,13 +1260,17 @@ struct SessionRow: View {
                     Text(SessionMeta.delegatedSummary(session))
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.green)
+                } else if session.status == .idle, let failure = session.lastOutcome.failureLabel {
+                    Text(failure)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.red)
                 } else if session.status == .idle, let message = session.lastAgentMessage {
                     Text(message)
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.inkSecondary)
                         .lineLimit(expanded ? 8 : 1)
                 } else if session.status == .idle {
-                    Text("done · click to jump")
+                    Text(session.completedSuccessfully ? "done · click to jump" : "idle · click to jump")
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.green)
                 } else if let action = session.lastAction {
@@ -1467,6 +1525,16 @@ struct PendingSessionCard: View {
                     AgentChip(session: session)
                     if let terminal = SessionMeta.terminalLabel(session) {
                         Chip(text: terminal)
+                    }
+                }
+                if ask == nil {
+                    let risk = ToolRiskClassifier.risk(toolName: pending.toolName, toolInput: pending.toolInput)
+                    if let warning = risk.warning {
+                        Text(warning)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(risk == .high ? Palette.amber : Palette.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Command risk: \(warning). Advisory only.")
                     }
                 }
                 if let ask {
@@ -1798,17 +1866,16 @@ struct ActionButton: View {
 
 /// Gentle infinite pulse (opacity) for "needs attention" accents.
 private struct BreathingModifier: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let period: Double
     @State private var dimmed = false
 
     func body(content: Content) -> some View {
         content
-            .opacity(dimmed ? 0.45 : 1)
-            .onAppear {
-                withAnimation(.easeInOut(duration: period).repeatForever()) {
-                    dimmed = true
-                }
-            }
+            .opacity(reduceMotion ? 1 : (dimmed ? 0.45 : 1))
+            .animation(reduceMotion ? nil : .easeInOut(duration: period).repeatForever(), value: dimmed)
+            .onAppear { dimmed = !reduceMotion }
+            .onChange(of: reduceMotion) { _, value in dimmed = !value }
     }
 }
 
@@ -1820,6 +1887,7 @@ extension View {
 
 /// Rocky alive: cycles bundled animation frames.
 struct RockyAnimatedSprite: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var prefix = "idle"
     var fallback = "south"
     var fps: Double = 8
@@ -1848,8 +1916,8 @@ struct RockyAnimatedSprite: View {
         if frames.isEmpty {
             RockySprite(state: fallback, fallback: "south", size: size)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / fps)) { timeline in
-                let index = Int(timeline.date.timeIntervalSinceReferenceDate * fps)
+            TimelineView(.animation(minimumInterval: 1.0 / fps, paused: reduceMotion)) { timeline in
+                let index = reduceMotion ? 0 : Int(timeline.date.timeIntervalSinceReferenceDate * fps)
                     % frames.count
                 Image(nsImage: frames[index])
                     .interpolation(.none)
@@ -1891,12 +1959,13 @@ struct RockySprite: View {
 
 /// Quantized mini meter, Rocky's voice made visible.
 struct EqualizerBars: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tint: Color
     var barCount: Int = 4
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 16.0)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
+        TimelineView(.animation(minimumInterval: 1.0 / 16.0, paused: reduceMotion)) { timeline in
+            let t = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(0..<barCount, id: \.self) { index in
                     let phase = t * 2.6 + Double(index) * 1.618 * 2

@@ -92,9 +92,15 @@ struct SettingsView: View {
         case .general:
             settingsForm { generalSections }
         case .integrations:
-            settingsForm { integrationsSection }
+            settingsForm {
+                brokerSection
+                integrationsSection
+            }
         case .diagnostics:
-            settingsForm { diagnosticsSection }
+            settingsForm {
+                brokerSection
+                diagnosticsSection
+            }
         case .usage:
             settingsForm { usageSections }
         case .about:
@@ -108,6 +114,23 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(.top, 4)
+    }
+
+    @ViewBuilder
+    private var brokerSection: some View {
+        if !hub.competingBrokers.isEmpty {
+            Section("Competing permission brokers") {
+                ForEach(hub.competingBrokers, id: \.self) { finding in
+                    Label(finding.description, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Monitored automatically. Rocky never removes or disables third-party integrations.")
+                    .font(.caption)
+            }
+        }
     }
 
     // MARK: - General
@@ -468,13 +491,24 @@ extension AgentIntegration {
             return pluginStyleHealthReport()
         }
         let data = try? Data(contentsOf: configURL)
-        return HookHealthCheck.inspectNested(
+        var report = HookHealthCheck.inspectNested(
             agent: displayName.lowercased(),
             displayName: displayName,
             expectedBinaryPath: AgentIntegration.hookBinaryPath,
             configPath: configURL.path,
             configData: data
         )
+        if displayName == "Codex" {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let toml = try? String(
+                contentsOf: home.appendingPathComponent(".codex/config.toml"),
+                encoding: .utf8
+            )
+            report.issues.append(contentsOf: HookHealthCheck.inspectCodexPluginBrokers(
+                configToml: toml
+            ))
+        }
+        return report
     }
 
     /// Health for agents that install via a dedicated plugin backend

@@ -77,10 +77,16 @@ public enum ClaudeSettingsMerger {
     ) throws -> Data {
         var root = try parse(data)
         var hooks = (root["hooks"] as? [String: Any]) ?? [:]
+        // A downgrade must not leave our unsupported event in an enum-keyed
+        // settings schema. Preserve foreign handlers even on this event.
+        if !events.contains(where: { $0.name == "StopFailure" }),
+           let groups = hooks["StopFailure"] as? [[String: Any]] {
+            let remaining = removingRockyHandlers(from: groups)
+            hooks["StopFailure"] = remaining.isEmpty ? nil : remaining
+        }
 
         for (event, needsReply) in events {
-            var groups = (hooks[event] as? [[String: Any]]) ?? []
-            groups.removeAll(where: isOurs)
+            var groups = removingRockyHandlers(from: (hooks[event] as? [[String: Any]]) ?? [])
 
             var hook: [String: Any] = [
                 "type": "command",
@@ -108,9 +114,9 @@ public enum ClaudeSettingsMerger {
             return try serialize(root)
         }
         for (event, value) in hooks {
-            guard var groups = value as? [[String: Any]] else { continue }
-            groups.removeAll(where: isOurs)
-            hooks[event] = groups.isEmpty ? nil : groups
+            guard let groups = value as? [[String: Any]] else { continue }
+            let remaining = removingRockyHandlers(from: groups)
+            hooks[event] = remaining.isEmpty ? nil : remaining
         }
         root["hooks"] = hooks.isEmpty ? nil : hooks
         return try serialize(root)
@@ -125,7 +131,7 @@ public enum ClaudeSettingsMerger {
         hookBinaryPath: String,
         commandArguments: String
     ) -> String {
-        var command = shellQuote(hookBinaryPath)
+        var command = ShellCommand.quote(hookBinaryPath)
         if !commandArguments.isEmpty {
             command += " " + commandArguments
         }
@@ -143,6 +149,10 @@ public enum ClaudeSettingsMerger {
     ) -> Bool {
         guard let root = try? parse(data),
               let hooks = root["hooks"] as? [String: Any] else { return false }
+        if !events.contains(where: { $0.name == "StopFailure" }),
+           let groups = hooks["StopFailure"] as? [[String: Any]], groups.contains(where: isOurs) {
+            return false
+        }
         let expected = hookCommand(
             hookBinaryPath: hookBinaryPath,
             commandArguments: commandArguments
@@ -151,7 +161,7 @@ public enum ClaudeSettingsMerger {
             guard let groups = hooks[event] as? [[String: Any]],
                   groups.contains(where: { group in
                       (group["hooks"] as? [[String: Any]])?.contains {
-                          ($0["command"] as? String) == expected
+                          ShellCommand.matches($0["command"] as? String, expected: expected)
                       } == true
                   })
             else { return false }
@@ -174,12 +184,29 @@ public enum ClaudeSettingsMerger {
 
     // MARK: - Internals
 
-    private static func isOurs(_ group: [String: Any]) -> Bool {
-        guard let hooks = group["hooks"] as? [[String: Any]] else { return false }
-        return hooks.contains { hook in
-            guard let command = hook["command"] as? String else { return false }
-            return command.contains(commandMarker) || command.contains(legacyMarker)
+    /// Shared by the nested Claude and Agy formats. Never discard a matcher
+    /// group just because one of its handlers belongs to Rocky.
+    static func removingRockyHandlers(from groups: [[String: Any]]) -> [[String: Any]] {
+        groups.compactMap { group in
+            guard let handlers = group["hooks"] as? [[String: Any]] else {
+                return isOurHandler(group) ? nil : group
+            }
+            let remaining = handlers.filter { !isOurHandler($0) }
+            guard remaining.count != handlers.count else { return group }
+            guard !remaining.isEmpty else { return nil }
+            var preserved = group
+            preserved["hooks"] = remaining
+            return preserved
         }
+    }
+
+    private static func isOurs(_ group: [String: Any]) -> Bool {
+        (group["hooks"] as? [[String: Any]])?.contains(where: isOurHandler) == true
+    }
+
+    private static func isOurHandler(_ hook: [String: Any]) -> Bool {
+        guard let command = hook["command"] as? String else { return false }
+        return command.contains(commandMarker) || command.contains(legacyMarker)
     }
 
     private static func parse(_ data: Data?) throws -> [String: Any] {
@@ -199,7 +226,4 @@ public enum ClaudeSettingsMerger {
         )
     }
 
-    private static func shellQuote(_ path: String) -> String {
-        path.contains(" ") ? "\"\(path)\"" : path
-    }
 }

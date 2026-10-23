@@ -53,7 +53,7 @@ public enum CursorSettingsMerger {
         hookBinaryPath: String,
         commandArguments: String
     ) -> String {
-        var command = shellQuote(hookBinaryPath)
+        var command = ShellCommand.quote(hookBinaryPath)
         if !commandArguments.isEmpty {
             command += " " + commandArguments
         }
@@ -133,7 +133,7 @@ public enum CursorSettingsMerger {
         for (event, _) in events {
             guard let entries = hooks[event] as? [[String: Any]],
                   entries.contains(where: {
-                      ($0["command"] as? String) == expected
+                      ShellCommand.matches($0["command"] as? String, expected: expected)
                   })
             else { return false }
         }
@@ -178,7 +178,4 @@ public enum CursorSettingsMerger {
         )
     }
 
-    private static func shellQuote(_ path: String) -> String {
-        path.contains(" ") ? "\"\(path)\"" : path
-    }
 }

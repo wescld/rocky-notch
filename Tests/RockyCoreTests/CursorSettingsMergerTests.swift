@@ -27,7 +27,7 @@ final class CursorSettingsMergerTests: XCTestCase {
             XCTAssertNil(entries[0]["hooks"], event)
             XCTAssertEqual(
                 entries[0]["command"] as? String,
-                "\(binary) --agent cursor",
+                "\(ShellCommand.quote(binary)) --agent cursor",
                 event
             )
         }

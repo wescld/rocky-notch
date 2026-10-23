@@ -34,6 +34,8 @@ public struct PersistedSession: Codable, Equatable, Sendable {
     /// pruned mid-flight. The second is the exact failure this status exists
     /// to prevent, so the list is carried across.
     public var backgroundTasks: [BackgroundTask]?
+    public var lastOutcome: TurnOutcome?
+    public var fullyIdle: Bool?
 
     public init(from session: AgentSession) {
         id = session.id
@@ -54,6 +56,8 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         lastAgentMessage = session.lastAgentMessage
         handoffAsksSomething = session.handoffAsksSomething
         backgroundTasks = session.backgroundTasks.isEmpty ? nil : session.backgroundTasks
+        lastOutcome = session.lastOutcome
+        fullyIdle = session.fullyIdle
     }
 
     public func asSession(now: Date = Date()) -> AgentSession {
@@ -79,6 +83,8 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         session.lastAgentMessage = lastAgentMessage
         session.handoffAsksSomething = handoffAsksSomething ?? false
         session.backgroundTasks = backgroundTasks ?? []
+        session.lastOutcome = lastOutcome ?? .none
+        session.fullyIdle = fullyIdle
         // Restored sessions are at best idle until a live hook re-attaches —
         // a running main loop cannot be assumed to have survived, and a
         // pending approval is never restored at all. Delegated work is the
@@ -93,7 +99,7 @@ public struct PersistedSession: Codable, Equatable, Sendable {
         // taken mid-turn (`.running` with minted rows) — restoring that as
         // idle would draw "done · click to jump" over agents still working.
         if session.status == .idle || session.status == .delegating {
-            session.status = session.backgroundTasks.isEmpty ? .idle : .delegating
+            session.status = SessionStore.restingStatus(of: session)
         }
         // Touch so prune doesn't instantly drop very old snapshots that
         // still have live PIDs (caller reconciles).

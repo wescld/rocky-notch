@@ -13,12 +13,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var defaultsObserver: AnyCancellable?
     private let integrations: [AgentIntegration] = [.claudeCode, .codex, .grok, .cursor, .kimi, .openCode, .agy]
     let hub = AgentHub()
+    private let brokerWatcher = PermissionBrokerWatcher()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        registerPixelFont()
         hub.start()
         installAutoDecideForTesting()
+        // Socket-only integration launches must not touch user configuration,
+        // persistence, discovery, updater state, or the owner's running app.
+        if IntegrationTestLaunch.isActive(arguments: CommandLine.arguments) { return }
+        registerPixelFont()
         wireAlerts()
         setUpStatusItem()
         applyDisplayMode()
@@ -30,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         healStaleHookPathIfNeeded()
         // One-time migration: drop the pre-rename support directory.
         try? FileManager.default.removeItem(atPath: IPC.legacyDirectory())
+        startBrokerMonitoring()
     }
 
     private func applyDisplayMode() {
@@ -37,7 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch Preferences.displayMode {
         case .notch:
             if notchController == nil {
-                notchController = NotchWindowController(hub: hub)
+                notchController = NotchWindowController(hub: hub) { [weak self] in
+                    self?.openSettings()
+                }
             }
             notchController?.setVisible(true)
             menuBarPanel?.hide()
@@ -53,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        brokerWatcher.stop()
         hub.stop()
     }
 
@@ -228,6 +236,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: - Competing permission brokers
+
+    private func startBrokerMonitoring() {
+        hub.onBrokerAlertDismissed = { [weak self] findings in
+            self?.brokerWatcher.dismiss(findings)
+        }
+        brokerWatcher.projects = { [weak self] in self?.hub.sessions.compactMap(\.cwd) ?? [] }
+        brokerWatcher.onChange = { [weak self] current, appeared in
+            guard let self else { return }
+            self.hub.competingBrokers = current
+            let retained = current.filter { self.hub.brokerAlert.contains($0) }
+            self.hub.brokerAlert = Array(Set(retained + appeared)).sorted { ($0.agent, $0.path) < ($1.agent, $1.path) }
+            guard !appeared.isEmpty else { return }
+            // Reuse the nonactivating console; never interrupt the terminal or
+            // cover pending approval cards with a modal dialog.
+            switch Preferences.displayMode {
+            case .notch: self.notchController?.revealPending()
+            case .menuBar: self.menuBarPanel?.show(relativeTo: self.statusItem?.button)
+            }
+        }
+        brokerWatcher.start()
+    }
+
     // MARK: - Alerts
 
     private func wireAlerts() {
@@ -254,10 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Integration-test hook: ROCKY_AUTODECIDE=allow|deny|ask makes the
     /// hub answer every permission request without UI. Never set in normal use.
     private func installAutoDecideForTesting() {
-        guard
-            let raw = ProcessInfo.processInfo.environment["ROCKY_AUTODECIDE"],
-            let decision = Decision(rawValue: raw)
-        else { return }
+        guard let decision = AutoDecideGate.decision(
+            environment: ProcessInfo.processInfo.environment,
+            arguments: CommandLine.arguments
+        ) else { return }
         hub.onPermissionRequest = { [weak self] session in
             guard let requestId = session.pending?.requestId else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {

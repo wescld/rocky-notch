@@ -46,12 +46,13 @@ final class MenuBarPanelController {
     func show(relativeTo button: NSStatusBarButton?) {
         layout(relativeTo: button)
         panel.orderFrontRegardless()
+        guard !isShown else { return }
         isShown = true
 
         // Resize live while visible (sessions come and go).
-        storeObservation = hub.$store
+        storeObservation = hub.$store.combineLatest(hub.$brokerAlert)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self, weak button] _ in
+            .sink { [weak self, weak button] _, _ in
                 DispatchQueue.main.async { self?.layout(relativeTo: button) }
             }
         // Any click outside dismisses.
@@ -118,6 +119,9 @@ struct MenuBarCard: View {
             .padding(.horizontal, 18)
             .padding(.top, 10)
             .padding(.bottom, 2)
+
+            PermissionBrokerBanner(hub: hub, onOpenSettings: onOpenSettings)
+                .padding(.horizontal, 18)
 
             SessionListView(hub: hub, onDismiss: { hub.dismiss(sessionId: $0) })
                 .padding(.horizontal, 18)

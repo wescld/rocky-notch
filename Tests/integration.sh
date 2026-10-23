@@ -15,13 +15,17 @@ swift build -c release >/dev/null 2>&1 || { echo "build falhou"; exit 1; }
 HOOK=.build/release/rocky-hook
 APP=.build/release/Rocky
 
-pkill -x Rocky; pkill -x Vibenotch 2>/dev/null; sleep 0.5
+TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rocky-integration.XXXXXX") || exit 1
+export ROCKY_SOCKET_PATH="$TEST_DIR/rocky.sock"
+# An inherited headless Claude environment must not skip these routing tests.
+export ROCKY_HOOK_HEADLESS_PERMISSIONS=gate
+trap 'kill "${APP_PID:-}" 2>/dev/null; wait "${APP_PID:-}" 2>/dev/null; /bin/rm -rf "$TEST_DIR"' EXIT
 
 PR_EVENT='{"session_id":"it","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"true"}}'
 
 # 1. App down: silent, fast, exit 0.
 start=$(python3 -c 'import time; print(time.time())')
-out=$(echo "$PR_EVENT" | $HOOK); code=$?
+out=$(echo "$PR_EVENT" | "$HOOK" --rocky-integration-test); code=$?
 elapsed=$(python3 -c "import time; print(int((time.time()-$start)*1000))")
 check "app-down: exit 0" "0" "$code"
 check "app-down: sem output" "" "$out"
@@ -30,11 +34,11 @@ check "app-down: sem output" "" "$out"
 
 # 2-4. allow / deny / ask com o app decidindo automaticamente.
 for decision in allow deny ask; do
-  ROCKY_AUTODECIDE=$decision ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 &
+  ROCKY_AUTODECIDE=$decision ROCKY_HEADLESS=1 $APP --rocky-integration-test >/dev/null 2>&1 &
   APP_PID=$!
   sleep 1.5
-  out=$(echo "$PR_EVENT" | $HOOK); code=$?
-  kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null
+  out=$(echo "$PR_EVENT" | "$HOOK" --rocky-integration-test); code=$?
+  kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; APP_PID=
   # O próximo app precisa ver o socket morto para fazer bind (anti-flake).
   sleep 1
   check "$decision: exit 0" "0" "$code"
@@ -51,10 +55,10 @@ for decision in allow deny ask; do
 done
 
 # 5. Evento fire-and-forget não espera resposta.
-ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!
+ROCKY_HEADLESS=1 $APP --rocky-integration-test >/dev/null 2>&1 & APP_PID=$!
 sleep 1.5
-out=$(echo '{"session_id":"it","hook_event_name":"Stop"}' | $HOOK); code=$?
-kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null
+out=$(echo '{"session_id":"it","hook_event_name":"Stop"}' | "$HOOK" --rocky-integration-test); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; APP_PID=
 check "stop: exit 0" "0" "$code"
 check "stop: sem output" "" "$out"
 
@@ -64,33 +68,31 @@ KIMI_READ='{"session_id":"kimi-it","hook_event_name":"PreToolUse","tool_name":"R
 KIMI_BASH='{"session_id":"kimi-it","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"true"}}'
 
 # 6. Read-only tool: the hook auto-passes without contacting the app.
-out=$(echo "$KIMI_READ" | $HOOK --agent kimi-code); code=$?
+out=$(echo "$KIMI_READ" | "$HOOK" --rocky-integration-test --agent kimi-code); code=$?
 check "kimi read-only: exit 0" "0" "$code"
 check "kimi read-only: silent (auto-pass)" "" "$out"
 
 # 7. Gate off (default): the app observes and releases the hook silently.
-defaults delete Rocky kimiGateEnabled 2>/dev/null
-ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
-out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
-kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+ROCKY_HEADLESS=1 $APP --rocky-integration-test -kimiGateEnabled NO >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | "$HOOK" --rocky-integration-test --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; APP_PID=; sleep 1
 check "kimi gate-off: exit 0" "0" "$code"
 check "kimi gate-off: silent (observe)" "" "$out"
 
 # 8. Gate on + deny: block reaches Kimi as permissionDecision (not Claude shape).
-defaults write Rocky kimiGateEnabled -bool true 2>/dev/null
-ROCKY_AUTODECIDE=deny ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
-out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
-kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+ROCKY_AUTODECIDE=deny ROCKY_HEADLESS=1 $APP --rocky-integration-test -kimiGateEnabled YES >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | "$HOOK" --rocky-integration-test --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; APP_PID=; sleep 1
 echo "$out" | grep -q '"permissionDecision":"deny"' && PASS=$((PASS+1)) \
   && echo "ok: kimi gate-on deny: JSON correto" \
   || { FAIL=$((FAIL+1)); echo "FAIL: kimi gate-on deny: output [$out]"; }
 
 # 9. Gate on + allow: deny-only means allow is silent (empty stdout).
-ROCKY_AUTODECIDE=allow ROCKY_HEADLESS=1 $APP >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
-out=$(echo "$KIMI_BASH" | $HOOK --agent kimi-code); code=$?
-kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; sleep 1
+ROCKY_AUTODECIDE=allow ROCKY_HEADLESS=1 $APP --rocky-integration-test -kimiGateEnabled YES >/dev/null 2>&1 & APP_PID=$!; sleep 1.5
+out=$(echo "$KIMI_BASH" | "$HOOK" --rocky-integration-test --agent kimi-code); code=$?
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null; APP_PID=; sleep 1
 check "kimi gate-on allow: silent (deny-only)" "" "$out"
-defaults delete Rocky kimiGateEnabled 2>/dev/null
+# Gate overrides use the argument domain; no persistent preferences are changed.
 
 echo "---"
 echo "passou: $PASS, falhou: $FAIL"

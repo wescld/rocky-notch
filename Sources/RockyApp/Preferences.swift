@@ -18,6 +18,11 @@ enum Preferences {
         }
     }
 
+    static var dismissedBrokerKeys: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "dismissedBrokerKeys") ?? []) }
+        set { UserDefaults.standard.set(newValue.sorted(), forKey: "dismissedBrokerKeys") }
+    }
+
     static var soundsEnabled: Bool {
         get {
             UserDefaults.standard.object(forKey: "soundsEnabled") as? Bool ?? true
@@ -37,7 +42,8 @@ enum Preferences {
     /// safety net; otherwise Rocky just observes Kimi sessions.
     static var kimiGateEnabled: Bool {
         get {
-            UserDefaults.standard.object(forKey: "kimiGateEnabled") as? Bool ?? false
+            // Also accepts the integration harness's non-persistent argument-domain override.
+            UserDefaults.standard.bool(forKey: "kimiGateEnabled")
         }
         set {
             UserDefaults.standard.set(newValue, forKey: "kimiGateEnabled")

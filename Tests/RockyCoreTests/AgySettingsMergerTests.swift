@@ -20,7 +20,7 @@ final class AgySettingsMergerTests: XCTestCase {
         let preHooks = try XCTUnwrap(pre[0]["hooks"] as? [[String: Any]])
         XCTAssertEqual(
             preHooks[0]["command"] as? String,
-            "\(binary) --agent agy --event PreToolUse"
+            "\(ShellCommand.quote(binary)) --agent agy --event PreToolUse"
         )
         XCTAssertEqual(preHooks[0]["timeout"] as? Int, 60)
 
@@ -29,7 +29,7 @@ final class AgySettingsMergerTests: XCTestCase {
         XCTAssertNil(stop[0]["hooks"])
         XCTAssertEqual(
             stop[0]["command"] as? String,
-            "\(binary) --agent agy --event Stop"
+            "\(ShellCommand.quote(binary)) --agent agy --event Stop"
         )
         XCTAssertEqual(stop[0]["timeout"] as? Int, 10)
 
@@ -104,6 +104,21 @@ final class AgySettingsMergerTests: XCTestCase {
         let root = try parse(out)
         XCTAssertNil(root["rocky-notch"])
         XCTAssertNotNil(root["someone-else"])
+    }
+
+    func testMixedGroupSurvivesHealingAndRemoval() throws {
+        let input = Data(#"{"rocky-notch":{"enabled":true,"PreToolUse":[{"matcher":"Bash","custom":"preserve","hooks":[{"command":"/old/rocky-hook"},{"command":"/fixture/foreign-hook"}]}],"Stop":[{"command":"/old/rocky-hook"},{"command":"/fixture/foreign-stop"}]}}"#.utf8)
+        for output in [try AgySettingsMerger.merge(settings: input, hookBinaryPath: binary),
+                       try AgySettingsMerger.unmerge(settings: input)] {
+            let group = try XCTUnwrap(try parse(output)["rocky-notch"] as? [String: Any])
+            let entry = try XCTUnwrap((group["PreToolUse"] as? [[String: Any]])?.first)
+            XCTAssertEqual(entry["matcher"] as? String, "Bash")
+            XCTAssertEqual(entry["custom"] as? String, "preserve")
+            let handlers = try XCTUnwrap(entry["hooks"] as? [[String: Any]])
+            XCTAssertEqual(handlers.count, 1)
+            XCTAssertEqual(handlers.first?["command"] as? String, "/fixture/foreign-hook")
+            XCTAssertTrue((group["Stop"] as? [[String: Any]])?.contains { $0["command"] as? String == "/fixture/foreign-stop" } == true)
+        }
     }
 
     func testStaleBinaryIsNotCurrent() throws {

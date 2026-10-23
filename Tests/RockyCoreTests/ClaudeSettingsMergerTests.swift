@@ -18,7 +18,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         }
         let pr = try XCTUnwrap((hooks["PermissionRequest"] as? [[String: Any]])?.first)
         let hook = try XCTUnwrap((pr["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(hook["command"] as? String, binary)
+        XCTAssertEqual(hook["command"] as? String, ShellCommand.quote(binary))
         XCTAssertEqual(hook["timeout"] as? Int, 60)
         XCTAssertTrue(ClaudeSettingsMerger.isInstalled(settings: out))
     }
@@ -49,6 +49,29 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         XCTAssertEqual((hooks["PreToolUse"] as? [[String: Any]])?.count, 1)
         // Stop has the foreign hook + ours.
         XCTAssertEqual((hooks["Stop"] as? [[String: Any]])?.count, 2)
+    }
+
+    func testMixedGroupsPreserveForeignHandlersDuringDowngradeHealingAndRemoval() throws {
+        let foreign: [String: Any] = ["type": "command", "command": "/fixture/foreign-hook", "timeout": 37]
+        let mixed: [String: Any] = [
+            "matcher": "Bash", "custom": "preserve",
+            "hooks": [["command": "/old/rocky-hook"], foreign, ["command": "/old/vibenotch-hook"]],
+        ]
+        let input = try JSONSerialization.data(withJSONObject: ["hooks": ["StopFailure": [mixed], "Stop": [mixed]]])
+        let healed = try ClaudeSettingsMerger.merge(settings: input, hookBinaryPath: binary)
+        let removed = try ClaudeSettingsMerger.unmerge(settings: input)
+        for output in [healed, removed] {
+            let hooks = try XCTUnwrap(try parse(output)["hooks"] as? [String: Any])
+            for event in ["StopFailure", "Stop"] {
+                let group = try XCTUnwrap((hooks[event] as? [[String: Any]])?.first)
+                XCTAssertEqual(group["matcher"] as? String, "Bash", event)
+                XCTAssertEqual(group["custom"] as? String, "preserve", event)
+                let handlers = try XCTUnwrap(group["hooks"] as? [[String: Any]])
+                XCTAssertEqual(handlers.count, 1, event)
+                XCTAssertEqual(handlers.first?["command"] as? String, foreign["command"] as? String, event)
+                XCTAssertEqual(handlers.first?["timeout"] as? Int, 37, event)
+            }
+        }
     }
 
     func testMergeIsIdempotent() throws {
@@ -85,7 +108,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         XCTAssertNotNil(hooks["UserPromptSubmit"])
         let pr = try XCTUnwrap((hooks["PermissionRequest"] as? [[String: Any]])?.first)
         let hook = try XCTUnwrap((pr["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(hook["command"] as? String, "\(binary) --agent codex")
+        XCTAssertEqual(hook["command"] as? String, "\(ShellCommand.quote(binary)) --agent codex")
         XCTAssertTrue(ClaudeSettingsMerger.isInstalled(settings: out))
     }
 
@@ -127,7 +150,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         let hooks = try XCTUnwrap(try parse(out)["hooks"] as? [String: Any])
         let group = try XCTUnwrap((hooks["Stop"] as? [[String: Any]])?.first)
         let hook = try XCTUnwrap((group["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(hook["command"] as? String, "\"\(spacedBinary)\"")
+        XCTAssertEqual(hook["command"] as? String, ShellCommand.quote(spacedBinary))
     }
 
     func testGrokEventsUsePreToolUse() throws {
@@ -141,7 +164,7 @@ final class ClaudeSettingsMergerTests: XCTestCase {
         XCTAssertNil(hooks["PermissionRequest"])
         let pre = try XCTUnwrap((hooks["PreToolUse"] as? [[String: Any]])?.first)
         let hook = try XCTUnwrap((pre["hooks"] as? [[String: Any]])?.first)
-        XCTAssertEqual(hook["command"] as? String, "\(binary) --agent grok")
+        XCTAssertEqual(hook["command"] as? String, "\(ShellCommand.quote(binary)) --agent grok")
         XCTAssertEqual(hook["timeout"] as? Int, 60)
         XCTAssertTrue(ClaudeSettingsMerger.isInstalled(settings: out))
         XCTAssertTrue(ClaudeSettingsMerger.isCurrent(

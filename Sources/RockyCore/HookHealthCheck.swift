@@ -15,6 +15,10 @@ public struct HookHealthReport: Equatable, Sendable {
         case staleCommandPath(recorded: String, expected: String)
         case notInstalled
         case otherHooksDetected(count: Int)
+        /// A second PermissionRequest broker (e.g. GitKraken's `--blocking`
+        /// plugin). Codex waits for every permission hook; the extra broker
+        /// dismisses or hangs Rocky's approval card.
+        case competingPermissionBroker(name: String)
 
         public var description: String {
             switch self {
@@ -32,6 +36,8 @@ public struct HookHealthReport: Equatable, Sendable {
                 "Rocky hooks are not installed"
             case .otherHooksDetected(let count):
                 "\(count) other hook command(s) coexist with Rocky"
+            case .competingPermissionBroker(let name):
+                "Competing permission broker: \(name). Multiple blocking hooks can leave Rocky approvals waiting. Disable the GitKraken agent status plugin in GitKraken Preferences > External Tools, or run gk ai hook uninstall <agent>. Rocky never removes foreign hooks."
             }
         }
 
@@ -128,16 +134,17 @@ public enum HookHealthCheck {
         }
 
         let commands = collectCommands(from: root)
-        let rockyCommands = commands.filter { $0.contains("rocky-hook") || $0.contains("Rocky") }
+        let rockyCommands = commands.filter {
+            $0.contains("rocky-hook") || $0.contains("vibenotch-hook") || $0.contains("Rocky")
+        }
         let otherCount = commands.count - rockyCommands.count
 
         if rockyCommands.isEmpty {
             issues.append(.notInstalled)
         } else {
             // Stale if none of the Rocky commands point at the expected binary.
-            let expectedQuoted = shellContains(path: expectedBinaryPath)
-            let anyCurrent = rockyCommands.contains { cmd in
-                cmd.contains(expectedBinaryPath) || expectedQuoted.map { cmd.contains($0) } == true
+            let anyCurrent = rockyCommands.contains {
+                ShellCommand.startsWithBinary($0, path: expectedBinaryPath)
             }
             if !anyCurrent, let sample = rockyCommands.first {
                 let recorded = extractBinaryPath(from: sample) ?? sample
@@ -149,6 +156,10 @@ public enum HookHealthCheck {
             issues.append(.otherHooksDetected(count: otherCount))
         }
 
+        for broker in competingPermissionBrokers(in: root) {
+            issues.append(.competingPermissionBroker(name: broker))
+        }
+
         return HookHealthReport(
             agent: agent,
             displayName: displayName,
@@ -156,6 +167,29 @@ public enum HookHealthCheck {
             expectedBinaryPath: expectedBinaryPath,
             configPath: configPath
         )
+    }
+
+    /// Codex also loads plugin-provided PermissionRequest hooks (GitKraken's
+    /// `gk ai hook --blocking` is the known case). Those never appear in
+    /// `~/.codex/hooks.json`, so inspect the plugin enablement table too.
+    public static func inspectCodexPluginBrokers(
+        configToml: String?,
+        extraHookCommands: [String] = []
+    ) -> [HookHealthReport.Issue] {
+        var issues: [HookHealthReport.Issue] = []
+        if let configToml, gitkrakenHooksPluginEnabled(in: configToml) {
+            issues.append(.competingPermissionBroker(name: "gitkraken-hooks"))
+        }
+        for command in extraHookCommands where isForeignPermissionBroker(command) {
+            issues.append(
+                .competingPermissionBroker(name: shortBrokerName(from: command))
+            )
+        }
+        return issues
+    }
+
+    public static func gitkrakenHooksPluginEnabled(in toml: String) -> Bool {
+        TOMLPluginSettings.gitkrakenEnabled(in: toml)
     }
 
     /// Cursor flat hooks.json shape.
@@ -181,6 +215,23 @@ public enum HookHealthCheck {
 
     // MARK: - Helpers
 
+    /// Non-Rocky commands registered under PermissionRequest / PreToolUse.
+    private static func competingPermissionBrokers(in root: [String: Any]) -> [String] {
+        PermissionBrokerScan.commands(in: root).map { _ in "GitKraken" }
+    }
+
+    private static func isForeignPermissionBroker(_ command: String) -> Bool {
+        PermissionBrokerScan.isBlockingGitKraken(command)
+    }
+
+    private static func shortBrokerName(from command: String) -> String {
+        let lower = command.lowercased()
+        if lower.contains("gitkraken") || lower.contains("gk ai hook") {
+            return "GitKraken"
+        }
+        return extractBinaryPath(from: command) ?? command
+    }
+
     private static func collectCommands(from root: [String: Any]) -> [String] {
         var results: [String] = []
         walk(root, into: &results)
@@ -198,21 +249,7 @@ public enum HookHealthCheck {
         }
     }
 
-    private static func shellContains(path: String) -> String? {
-        // Common shell-quoted form: '/path with spaces/rocky-hook'
-        path.contains(" ") ? "'\(path)'" : nil
-    }
-
     private static func extractBinaryPath(from command: String) -> String? {
-        // First token, strip surrounding quotes.
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if trimmed.hasPrefix("'"), let end = trimmed.dropFirst().firstIndex(of: "'") {
-            return String(trimmed[trimmed.index(after: trimmed.startIndex)..<end])
-        }
-        if trimmed.hasPrefix("\""), let end = trimmed.dropFirst().firstIndex(of: "\"") {
-            return String(trimmed[trimmed.index(after: trimmed.startIndex)..<end])
-        }
-        return trimmed.split(separator: " ").first.map(String.init)
+        ShellCommand.firstWord(in: command)?.0
     }
 }

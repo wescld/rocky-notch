@@ -14,8 +14,17 @@ public enum IPC {
         (home as NSString).appendingPathComponent("Library/Application Support/vibenotch")
     }
 
-    public static func socketPath(home: String = NSHomeDirectory()) -> String {
-        (home as NSString)
+    public static func socketPath(
+        home: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = CommandLine.arguments,
+        isDebugBuild: Bool = AutoDecideGate.isDebugBuild
+    ) -> String {
+        if isDebugBuild || IntegrationTestLaunch.isActive(arguments: arguments),
+           let alternate = environment["ROCKY_SOCKET_PATH"], alternate.hasPrefix("/") {
+            return alternate
+        }
+        return (home as NSString)
             .appendingPathComponent(socketDirectory)
             .appending("/" + socketName)
     }

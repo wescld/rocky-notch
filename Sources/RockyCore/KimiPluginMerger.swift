@@ -82,7 +82,7 @@ public enum KimiPluginMerger {
         hookBinaryPath: String,
         commandArguments: String
     ) -> String {
-        var command = shellQuote(hookBinaryPath)
+        var command = ShellCommand.quote(hookBinaryPath)
         if !commandArguments.isEmpty {
             command += " " + commandArguments
         }
@@ -168,7 +168,7 @@ public enum KimiPluginMerger {
         for (event, _) in events {
             guard hooks.contains(where: {
                 ($0["event"] as? String) == event
-                    && ($0["command"] as? String) == expected
+                    && ShellCommand.matches($0["command"] as? String, expected: expected)
             }) else { return false }
         }
         return true
@@ -215,7 +215,4 @@ public enum KimiPluginMerger {
         )
     }
 
-    private static func shellQuote(_ path: String) -> String {
-        path.contains(" ") ? "\"\(path)\"" : path
-    }
 }

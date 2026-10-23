@@ -62,13 +62,34 @@ struct AgentIntegration {
         FileManager.default.homeDirectoryForCurrentUser
     }
 
+    /// Inspect installation metadata only; never launch an agent to probe it.
+    private static var installedClaudeVersion: String? {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let directories = path.split(separator: ":").map(String.init) + [
+            home.appendingPathComponent(".local/bin").path, "/opt/homebrew/bin", "/usr/local/bin",
+        ]
+        for directory in directories {
+            let binary = URL(fileURLWithPath: directory).appendingPathComponent("claude")
+                .resolvingSymlinksInPath()
+            guard FileManager.default.isExecutableFile(atPath: binary.path),
+                  let handle = try? FileHandle(forReadingFrom: binary) else { continue }
+            defer { try? handle.close() }
+            let data = (try? handle.read(upToCount: 512)) ?? Data()
+            return ClaudeHookCapabilities.version(
+                resolvedBinaryName: binary.lastPathComponent,
+                header: String(data: data, encoding: .utf8) ?? ""
+            )
+        }
+        return nil
+    }
+
     static var claudeCode: AgentIntegration {
         let config = home.appendingPathComponent(".claude/settings.json")
         return AgentIntegration(
             displayName: "Claude Code",
             configURL: config,
             presenceDirectory: config.deletingLastPathComponent(),
-            events: ClaudeSettingsMerger.claudeEvents,
+            events: ClaudeHookCapabilities.events(version: installedClaudeVersion),
             // Explicit, so a Claude session that inherited Grok's GROK_* env
             // (grok shelling out to `claude`) is not mistaken for Grok and
             // answered in Grok's reply shape.

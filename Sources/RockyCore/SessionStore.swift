@@ -96,6 +96,12 @@ public struct AgentSession: Identifiable, Equatable, Sendable {
     /// list maintains itself: each child that finishes reannounces the rest,
     /// and an empty list is the session saying it is finally done.
     public var backgroundTasks: [BackgroundTask] = []
+    public var lastOutcome: TurnOutcome = .none
+    public var fullyIdle: Bool? = nil
+
+    public var completedSuccessfully: Bool {
+        status == .idle && lastOutcome == .succeeded && fullyIdle != false
+    }
 
     /// Live activity (a tool call landing) outranks a wait we were told about
     /// earlier: the agent cannot be blocked on the user and running a tool at
@@ -167,7 +173,7 @@ public struct SessionStore: Equatable, Sendable {
     /// notification that trails it), so the rule lives in one place rather
     /// than in each of them.
     static func restingStatus(of session: AgentSession) -> AgentSession.Status {
-        session.backgroundTasks.isEmpty ? .idle : .delegating
+        session.backgroundTasks.isEmpty && session.fullyIdle != false ? .idle : .delegating
     }
 
     /// Lower sorts first. Proven signals outrank the question hint, which in
@@ -260,10 +266,14 @@ public struct SessionStore: Equatable, Sendable {
 
         switch event.kind {
         case .sessionStart:
+            session.lastOutcome = .none
+            session.fullyIdle = nil
             session.status = .running
             session.title = event.sessionTitle ?? session.title
             session.model = event.model ?? session.model
         case .userPromptSubmit:
+            session.lastOutcome = .none
+            session.fullyIdle = nil
             session.status = .running
             // The user answered, so the previous handoff is spent: drop the
             // closing message and any wait it was blocked on.
@@ -306,6 +316,8 @@ public struct SessionStore: Equatable, Sendable {
                 break
             }
         case .postToolUse:
+            session.lastOutcome = .none
+            session.fullyIdle = nil
             // The tool executed, so the approval happened somewhere we cannot
             // see (the terminal prompt). Drop the card instead of leaving it
             // up until the decision timeout.
@@ -325,6 +337,8 @@ public struct SessionStore: Equatable, Sendable {
                 )
             }
         case .stop:
+            session.lastOutcome = event.outcome
+            session.fullyIdle = event.fullyIdle
             // The agent's closing words are the handoff. Keep them so the notch
             // can show what it left us with instead of a bare "done".
             if let closing = Self.closingLine(from: event.lastAssistantMessage) {
@@ -339,6 +353,9 @@ public struct SessionStore: Equatable, Sendable {
                 session.status = Self.restingStatus(of: session)
             }
         case .subagentStop:
+            // A failed child must never turn a parked failure into success.
+            if event.outcome.failureLabel != nil { session.lastOutcome = event.outcome }
+            if let fullyIdle = event.fullyIdle { session.fullyIdle = fullyIdle }
             // The closing words on this event are the *subagent's*; the parent
             // keeps its own. All that is taken from here is the refreshed
             // in-flight list applied above — and where that leaves a session

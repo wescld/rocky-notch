@@ -23,7 +23,7 @@ final class KimiPluginMergerTests: XCTestCase {
         XCTAssertEqual(hooks.count, KimiPluginMerger.kimiEvents.count)
 
         let pre = try XCTUnwrap(hooks.first { ($0["event"] as? String) == "PreToolUse" })
-        XCTAssertEqual(pre["command"] as? String, "\(binary) \(args)")
+        XCTAssertEqual(pre["command"] as? String, "\(ShellCommand.quote(binary)) \(args)")
         XCTAssertEqual(pre["timeout"] as? Int, 60)
         // Observe-only events use the short timeout.
         let stop = try XCTUnwrap(hooks.first { ($0["event"] as? String) == "Stop" })
@@ -39,7 +39,7 @@ final class KimiPluginMergerTests: XCTestCase {
         let out = try KimiPluginMerger.manifest(hookBinaryPath: spaced, commandArguments: args)
         let hooks = try XCTUnwrap(try parse(out)["hooks"] as? [[String: Any]])
         let pre = try XCTUnwrap(hooks.first { ($0["event"] as? String) == "PreToolUse" })
-        XCTAssertEqual(pre["command"] as? String, "\"\(spaced)\" \(args)")
+        XCTAssertEqual(pre["command"] as? String, "\(ShellCommand.quote(spaced)) \(args)")
     }
 
     // MARK: - Registry merge
